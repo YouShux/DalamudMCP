@@ -1,0 +1,24 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)Directory.Build.local.props"
+          Condition="'$(UseLocalOutput)' != 'false' and '$(CI)' != 'true' and Exists('$(MSBuildThisFileDirectory)Directory.Build.local.props')" />
+
+  <PropertyGroup Condition="'$(DalamudMCPOutputRoot)' != ''">
+    <OutputPath>$(DalamudMCPOutputRoot)/</OutputPath>
+    <OutputPath Condition="'$(MSBuildProjectName)' == 'DalamudMCP.Server'">$(DalamudMCPOutputRoot)/server/</OutputPath>
+    <BaseOutputPath>$(OutputPath)</BaseOutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(DALAMUD_HOME)' == '' and '$(DalamudLibPath)' == '' and Exists('$(APPDATA)/XIVLauncherCN/addon/Hooks/dev/Dalamud.dll')">
+    <DALAMUD_HOME>$(APPDATA)/XIVLauncherCN/addon/Hooks/dev</DALAMUD_HOME>
+  </PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Deterministic>true</Deterministic>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+</Project>

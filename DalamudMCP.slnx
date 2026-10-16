@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/DalamudMCP.Plugin/DalamudMCP.Plugin.csproj" />
+  <Project Path="src/DalamudMCP.Server/DalamudMCP.Server.csproj" />
+</Solution>

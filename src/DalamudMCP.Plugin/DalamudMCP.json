@@ -1,0 +1,16 @@
+{
+  "Author": "YouShu",
+  "Name": "DalamudMCP",
+  "InternalName": "DalamudMCP",
+  "RepoUrl": "https://github.com/YouShux/DalamudMCP",
+  "AssemblyVersion": "1.0.0.0",
+  "Punchline": "统一游戏工具与卫月调试能力的本地 MCP 服务。",
+  "Description": "在一个 MCP 端点中提供游戏状态、交互和卫月内置调试工具，支持按工具管理权限。",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 15,
+  "LoadRequiredState": 0,
+  "LoadSync": false,
+  "CanUnloadAsync": false,
+  "AcceptsFeedback": false,
+  "Tags": ["mcp", "开发工具"]
+}

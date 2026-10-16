@@ -1,0 +1,12 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <AssemblyName>DalamudMCP</AssemblyName>
+    <RootNamespace>DalamudMCP.Plugin</RootNamespace>
+    <Version>1.0.0</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+    <None Update="DalamudMCP.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

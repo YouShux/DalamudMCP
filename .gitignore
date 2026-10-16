@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+Directory.Build.local.props
+/build.ps1
+artifacts/
+.vs/
+.idea/
