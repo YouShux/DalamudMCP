@@ -2,11 +2,15 @@
   <PropertyGroup>
     <AssemblyName>DalamudMCP</AssemblyName>
     <RootNamespace>DalamudMCP.Plugin</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Use_DalamudPackager>false</Use_DalamudPackager>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
-    <None Update="DalamudMCP.json" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="Data/packet-layouts.json" LogicalName="DalamudMCP.PacketLayouts" />
+    <EmbeddedResource Include="Data/cn-opcodes.json" LogicalName="DalamudMCP.CnOpcodes" />
+    <None Include="DalamudMCP.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../images/icon.png" Link="images/icon.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

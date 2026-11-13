@@ -2,10 +2,8 @@
   <Import Project="$(MSBuildThisFileDirectory)Directory.Build.local.props"
           Condition="'$(UseLocalOutput)' != 'false' and '$(CI)' != 'true' and Exists('$(MSBuildThisFileDirectory)Directory.Build.local.props')" />
 
-  <PropertyGroup Condition="'$(DalamudMCPOutputRoot)' != ''">
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'DalamudMCP.Plugin' and '$(DalamudMCPOutputRoot)' != '' and '$(UseLocalOutput)' != 'false' and '$(CI)' != 'true' and '$(ArtifactsPath)' == ''">
     <OutputPath>$(DalamudMCPOutputRoot)/</OutputPath>
-    <OutputPath Condition="'$(MSBuildProjectName)' == 'DalamudMCP.Server'">$(DalamudMCPOutputRoot)/server/</OutputPath>
-    <BaseOutputPath>$(OutputPath)</BaseOutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>

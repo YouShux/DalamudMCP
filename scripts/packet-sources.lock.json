@@ -1,0 +1,47 @@
+{
+  "formatVersion": 1,
+  "packages": [
+    {
+      "name": "@ffcafe/elpis-network",
+      "version": "0.1.0",
+      "integrity": "sha512-h5B6cVd3/ij3CeeQ+tKCQzGdsCn+jyXfoeC+fw/3/UJf3WzuSdNi4+Xp419R5Onh4sQ/dTbnLbd9WgqBDXOAhA==",
+      "url": "https://registry.npmjs.org/@ffcafe/elpis-network/-/elpis-network-0.1.0.tgz",
+      "license": "GPL-3.0-only"
+    },
+    {
+      "name": "@ffcafe/elpis-struct",
+      "version": "0.1.0",
+      "integrity": "sha512-/BUfpRsFqKbNedTo/u/7dX1jMfgH5dJtYM1d0m1evsQ8veX8xLqPWe9Bgtf9C/pDR8qy6PEXa+rHZDuoT7Zmtg==",
+      "url": "https://registry.npmjs.org/@ffcafe/elpis-struct/-/elpis-struct-0.1.0.tgz",
+      "license": "GPL-3.0-only"
+    },
+    {
+      "name": "reflect-metadata",
+      "version": "0.2.2",
+      "integrity": "sha512-urBwgfrvVP/eAyXx4hluJivBKzuEbSQs9rKWCrCkbSxNv8mxPcUZKeuoF3Uy4mJl3Lwprp6yy5/39VWigZ4K6Q==",
+      "url": "https://registry.npmjs.org/reflect-metadata/-/reflect-metadata-0.2.2.tgz",
+      "license": "Apache-2.0"
+    }
+  ],
+  "structureSource": {
+    "repository": "thewakingsands/elpis",
+    "revision": "310cbe614eeb7815e2ead3fd0badd01e35b219e6",
+    "branch": "main",
+    "path": "packages/network/src/definitions/ipc/",
+    "archiveSha256": "e75ac5ed37066e9a7d7a68257b641e4edda6178f236a2c74c03d8671ada38e48",
+    "contentSha256": "d631f19c179c17d447936e633153834880deefb8e715c53382603508d0fd8a24",
+    "fileCount": 168
+  },
+  "aliasSource": {
+    "repository": "zhyupe/ffxiv-opcode-worker",
+    "revision": "e79992d6b84fe82dabd02d1c83bed6a56d6f66d2",
+    "branch": "master",
+    "path": "packets.yaml",
+    "sha256": "5676e22e0c9ed24be698a893615bff60f382815497a4da73831ff981cbaf6eaf",
+    "licenseSha256": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef"
+  },
+  "expected": {
+    "packets": 177,
+    "structures": 218
+  }
+}

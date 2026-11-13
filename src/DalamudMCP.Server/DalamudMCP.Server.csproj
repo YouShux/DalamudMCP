@@ -1,12 +1,35 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <AssemblyName>DalamudMCP.Server</AssemblyName>
-    <Version>1.0.0</Version>
+    <Version>1.1.0.0</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+    <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.1.0" />
     <Compile Include="../Shared/*.cs" Link="Shared/%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../LICENSE" LogicalName="Notices.Overview" />
+    <EmbeddedResource Include="$(PackageNoticesFile)" LogicalName="Notices.Dependencies"
+                      Condition="'$(PackageNoticesFile)' != ''" />
   </ItemGroup>
+  <Target Name="RequirePackageNotices" BeforeTargets="PrepareForPublish">
+    <Error Condition="!Exists('$(PackageNoticesFile)')" Text="Package notices are required. Run build.ps1 to produce a distributable package." />
+  </Target>
+  <Target Name="EmbedRuntimeNotices" BeforeTargets="AssignTargetPaths"
+          DependsOnTargets="ResolveFrameworkReferences" Condition="'$(SelfContained)' == 'true'">
+    <ItemGroup>
+      <_NoticeFramework Include="@(ResolvedFrameworkReference)"
+                        Condition="'%(Identity)' == 'Microsoft.NETCore.App' or '%(Identity)' == 'Microsoft.AspNetCore.App'" />
+      <EmbeddedResource Include="%(_NoticeFramework.RuntimePackPath)/LICENSE.TXT"
+                        LogicalName="Notices.%(_NoticeFramework.Identity).License" />
+      <EmbeddedResource Include="%(_NoticeFramework.RuntimePackPath)/THIRD-PARTY-NOTICES.TXT"
+                        LogicalName="Notices.%(_NoticeFramework.Identity).ThirdParty" />
+    </ItemGroup>
+  </Target>
 </Project>

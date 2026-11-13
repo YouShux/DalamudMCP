@@ -17,18 +17,22 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin(IDalamudPluginInterface pluginInterface, IFramework framework, IClientState clientState,
         ICondition condition, IObjectTable objectTable, IPlayerState playerState, IGameInventory gameInventory,
         IFateTable fateTable, IDataManager dataManager, IGameGui gameGui, ITargetManager targetManager,
-        IChatGui chatGui, IDutyState dutyState, ICommandManager commandManager, IPluginLog log)
+        IChatGui chatGui, IDutyState dutyState, ICommandManager commandManager, IPluginLog log,
+        IPartyList partyList, IBuddyList buddyList, IAetheryteList aetheryteList, IJobGauges jobGauges, IUnlockState unlockState,
+        IGameInteropProvider interop, ITextureProvider textures, ITextureReadbackProvider textureReadback, IAddonLifecycle addonLifecycle, ISigScanner sigScanner)
     {
         this.pluginInterface = pluginInterface;
         commands = commandManager;
         var settings = new SettingsStore(pluginInterface, log);
         tools = new GameTools(new GameServices(pluginInterface, framework, clientState, condition, objectTable,
-            playerState, gameInventory, fateTable, dataManager, gameGui, targetManager, chatGui, dutyState, commandManager, log));
+            playerState, gameInventory, fateTable, dataManager, gameGui, targetManager, chatGui, dutyState, commandManager, log,
+            partyList, buddyList, aetheryteList, jobGauges, unlockState, interop, textures, textureReadback, addonLifecycle, sigScanner), settings);
         pipe = new PipeServer(tools, settings, log);
         server = new ServerController(pluginInterface, settings, pipe.Name, log);
         window = new ConfigWindow(settings, server, tools.Tools);
         commands.AddHandler("/dalamudmcp", new CommandInfo(OnCommand) { HelpMessage = "打开 DalamudMCP 设置。" });
         pluginInterface.UiBuilder.Draw += window.Draw;
+        pluginInterface.UiBuilder.Draw += tools.CaptureWindowFrame;
         pluginInterface.UiBuilder.OpenConfigUi += window.Open;
         pluginInterface.UiBuilder.OpenMainUi += window.Open;
         if (settings.Current.AutoStart) server.Start();
@@ -39,6 +43,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         pluginInterface.UiBuilder.Draw -= window.Draw;
+        pluginInterface.UiBuilder.Draw -= tools.CaptureWindowFrame;
         pluginInterface.UiBuilder.OpenConfigUi -= window.Open;
         pluginInterface.UiBuilder.OpenMainUi -= window.Open;
         commands.RemoveHandler("/dalamudmcp");

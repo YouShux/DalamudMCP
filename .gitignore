@@ -1,7 +1,12 @@
 **/bin/
 **/obj/
 Directory.Build.local.props
-/build.ps1
 artifacts/
 .vs/
 .idea/
+
+/ARCHITECTURE.md
+/update.ps1
+/scripts/InstalledUpdate.ps1
+/scripts/LocalMcp.ps1
+/scripts/Sync-DevelopmentSkill.ps1
