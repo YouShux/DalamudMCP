@@ -27,6 +27,8 @@ public sealed class ServerController : IDisposable
     private Task? refresh;
     private long nextRefresh;
     private bool disposed;
+    private int activePort;
+    private int generation;
 
     public ServerController(IDalamudPluginInterface pluginInterface, SettingsStore settings, string pipeName, IPluginLog log)
     {
@@ -37,7 +39,8 @@ public sealed class ServerController : IDisposable
             ?? throw new InvalidOperationException("插件目录不存在。"), "server", "DalamudMCP.Server.exe");
     }
 
-    public string Endpoint => $"http://127.0.0.1:{settings.Current.HTTPPort}/mcp";
+    public string Endpoint => $"http://127.0.0.1:{(Volatile.Read(ref activePort) is var port && port != 0 ? port : settings.Current.HTTPPort)}/mcp";
+    public int NativePort => settings.Snapshot.NativePort;
     public bool IsRunning => process is { HasExited: false };
     public bool IsRefreshing => refresh is { IsCompleted: false };
     public GatewayStatus? Status { get; private set; }
@@ -46,6 +49,10 @@ public sealed class ServerController : IDisposable
     public void Start()
     {
         if (disposed || IsRunning) return;
+        Interlocked.Increment(ref generation);
+        Status = null;
+        settings.RefreshNativeEndpoint();
+        Volatile.Write(ref activePort, 0);
         process?.Dispose();
         process = null;
         if (LocalBearer.ReadToken(preferUserStore: true) is not { } token)
@@ -95,7 +102,11 @@ public sealed class ServerController : IDisposable
 
     private void OnOutput(object sender, DataReceivedEventArgs arguments)
     {
-        if (arguments.Data is not { } line) return;
+        if (!ReferenceEquals(sender, process) || arguments.Data is not { } line) return;
+        if (line.Split(':') is ["DALAMUDMCP_READY", var portText, var parentText] &&
+            int.TryParse(portText, out var port) && int.TryParse(parentText, out var parent) &&
+            parent == Environment.ProcessId && LocalInstances.CandidatePorts(settings.Current.HTTPPort).Contains(port))
+            Volatile.Write(ref activePort, port);
         lock (output)
         {
             output.AppendLine(line);
@@ -106,6 +117,7 @@ public sealed class ServerController : IDisposable
     public void Refresh(bool reconnect = false)
     {
         if (disposed || IsRefreshing) return;
+        if (reconnect) settings.RefreshNativeEndpoint();
         if (!IsRunning)
         {
             Status = null;
@@ -119,21 +131,23 @@ public sealed class ServerController : IDisposable
             return;
         }
         if (!reconnect && Environment.TickCount64 < nextRefresh) return;
+        if (Volatile.Read(ref activePort) == 0) return;
         nextRefresh = Environment.TickCount64 + 3000;
         refresh = RefreshAsync(reconnect);
     }
 
     private async Task RefreshAsync(bool reconnect)
     {
+        var currentGeneration = Volatile.Read(ref generation);
         try
         {
-            var address = $"http://127.0.0.1:{settings.Current.HTTPPort}/{(reconnect ? "refresh" : "status")}";
+            var address = $"http://127.0.0.1:{Volatile.Read(ref activePort)}/{(reconnect ? "refresh" : "status")}";
             using var request = new HttpRequestMessage(reconnect ? HttpMethod.Post : HttpMethod.Get, address);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", activeToken);
             using var response = await client.SendAsync(request, lifetime.Token).ConfigureAwait(false);
             if (response.StatusCode == HttpStatusCode.Unauthorized)
             {
-                if (!disposed)
+                if (!disposed && currentGeneration == Volatile.Read(ref generation))
                 {
                     Status = null;
                     Error = "本地服务拒绝了令牌，请检查环境变量并重启启动器和游戏。";
@@ -143,18 +157,21 @@ public sealed class ServerController : IDisposable
             response.EnsureSuccessStatusCode();
             var status = await response.Content.ReadFromJsonAsync<GatewayStatus>(ToolJson.Options, lifetime.Token).ConfigureAwait(false)
                 ?? throw new JsonException("服务状态为空。");
-            if (disposed) return;
+            if (status.GameProcessID != Environment.ProcessId || status.InstanceID != settings.Snapshot.InstanceID)
+                throw new JsonException("服务不属于当前游戏实例。");
+            if (disposed || currentGeneration != Volatile.Read(ref generation)) return;
             Status = status;
             Error = null;
         }
         catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or JsonException)
         {
-            if (!disposed) Error = "正在连接本地服务，请稍候。";
+            if (!disposed && currentGeneration == Volatile.Read(ref generation)) Error = "正在连接本地服务，请稍候。";
         }
     }
 
     public void Stop()
     {
+        Interlocked.Increment(ref generation);
         if (process is { } current)
         {
             try { if (!current.HasExited) current.Kill(true); }
@@ -168,6 +185,7 @@ public sealed class ServerController : IDisposable
         Status = null;
         Error = null;
         activeToken = null;
+        Volatile.Write(ref activePort, 0);
     }
 
     public void Dispose()

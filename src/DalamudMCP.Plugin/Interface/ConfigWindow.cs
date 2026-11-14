@@ -62,6 +62,7 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
         var nativeConnected = server.Status?.NativeConnected == true;
         ImGui.TextColored(nativeConnected ? SuccessColor : MutedColor, nativeConnected ? "卫月调试已连接" : "卫月调试未连接");
         if (server.Error is { } error) ImGui.TextWrapped(error);
+        ImGui.TextUnformatted($"游戏进程：{Environment.ProcessId}；卫月调试端口：{server.NativePort}");
     }
 
     private void DrawTools()
@@ -244,7 +245,7 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
         }
         ImGui.BeginDisabled(server.IsRunning);
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 9);
-        ImGui.InputInt("MCP 端口", ref httpPort);
+        ImGui.InputInt("首选 MCP 端口", ref httpPort);
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
             if (httpPort is >= 1024 and <= 65535 && httpPort != config.NativePort)
@@ -261,7 +262,7 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
         }
         ImGui.EndDisabled();
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 9);
-        ImGui.InputInt("卫月调试端口", ref nativePort);
+        ImGui.InputInt("首选卫月调试端口", ref nativePort);
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
             if (nativePort is >= 1024 and <= 65535 && nativePort != config.HTTPPort)
@@ -278,6 +279,7 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
             }
         }
         if (portError is { } errorText) ImGui.TextColored(WarningColor, errorText);
+        ImGui.TextWrapped("多开时自动避让占用端口。连接请使用上方实际地址；临时端口不会写回共享配置。");
         ImGui.BeginDisabled(!server.IsRunning || server.IsRefreshing);
         if (ImGui.Button("重新连接卫月调试")) server.Refresh(true);
         ImGui.EndDisabled();

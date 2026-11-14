@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>DalamudMCP.Tests</AssemblyName>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <RuntimeFrameworkVersion>10.0.12</RuntimeFrameworkVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/DalamudMCP.Server/DalamudMCP.Server.csproj" />
+    <Compile Include="../../src/DalamudMCP.Plugin/Internal/Host/NativeTraceLog.cs" Link="NativeTraceLog.cs" />
+  </ItemGroup>
+</Project>

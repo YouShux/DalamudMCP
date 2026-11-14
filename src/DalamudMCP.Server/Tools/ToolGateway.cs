@@ -10,7 +10,7 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
     public async Task<ListToolsResult> ListAsync(CancellationToken cancellationToken)
     {
         var catalog = await game.SendAsync<ToolCatalog>(new("tools/list"), cancellationToken);
-        await native.ConnectAsync(catalog.Settings.NativePort, false, cancellationToken);
+        await native.ConnectAsync(catalog.Settings.NativePort, catalog.Settings.GameProcessID, false, cancellationToken);
         var settings = catalog.Settings;
         var tools = new List<Tool>();
         foreach (var definition in catalog.Tools)
@@ -68,7 +68,7 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
             if (settings.DisabledTools.Contains(request.Name, StringComparer.Ordinal))
                 return Error("此工具已禁用。");
 
-            await native.ConnectAsync(settings.NativePort, false, cancellationToken);
+            await native.ConnectAsync(settings.NativePort, settings.GameProcessID, false, cancellationToken);
             if (native.Current is not { } active)
                 return Error("卫月原生 MCP 未连接。");
             var tool = active.Tools.FirstOrDefault(item => item.Name == request.Name);
@@ -80,13 +80,15 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
             if (tool.Name == "control" && !NativeAccess.AllowsControlAction(action, active.Reviewed))
                 return Error("不支持该线程操作；此入口禁止暂停线程。");
             var currentSettings = await game.SendAsync<BridgeSettings>(new("settings"), cancellationToken);
-            if (currentSettings.NativePort != settings.NativePort || !ReferenceEquals(active.Client, native.Current?.Client))
+            if (currentSettings.NativePort != settings.NativePort || currentSettings.GameProcessID != active.GameProcessID ||
+                currentSettings.InstanceID != settings.InstanceID || !ReferenceEquals(active.Client, native.Current?.Client))
                 return Error("卫月原生 MCP 连接已变化，请刷新工具目录。");
             if (currentSettings.DisabledTools.Contains(request.Name, StringComparer.Ordinal))
                 return Error("此工具已禁用。");
             if (!NativeAccess.IsAllowed(NativeAccess.GetAccess(tool, active.Reviewed, action), currentSettings))
                 return Error("此操作所需权限尚未开启，请在 DalamudMCP 设置中确认。");
 
+            await NativeBridge.VerifyProcessAsync(active.Client, currentSettings.GameProcessID, cancellationToken);
             return await active.Client.CallToolAsync(request, cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -98,13 +100,13 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
     public async Task<GatewayStatus> StatusAsync(bool refresh, CancellationToken cancellationToken)
     {
         var catalog = await game.SendAsync<ToolCatalog>(new("tools/list"), cancellationToken);
-        await native.ConnectAsync(catalog.Settings.NativePort, refresh, cancellationToken);
-        if (native.Current is not { } active) return new(false, native.Error, catalog.Tools);
+        await native.ConnectAsync(catalog.Settings.NativePort, catalog.Settings.GameProcessID, refresh, cancellationToken);
+        if (native.Current is not { } active) return new(false, native.Error, catalog.Tools, catalog.Settings.GameProcessID, catalog.Settings.InstanceID);
 
         var tools = catalog.Tools.Concat(NativeTools(catalog, active).Select(tool => new ToolDefinition(
             tool.Name, tool.Title ?? tool.Name, tool.Description ?? string.Empty,
             tool.InputSchema, NativeAccess.GetAccess(tool, active.Reviewed), "native"))).ToArray();
-        return new(true, null, tools);
+        return new(true, null, tools, catalog.Settings.GameProcessID, catalog.Settings.InstanceID);
     }
 
     internal static void RemoveDuplicateText(CallToolResult result)

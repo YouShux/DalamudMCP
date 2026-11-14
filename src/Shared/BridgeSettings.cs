@@ -4,4 +4,6 @@ public sealed record BridgeSettings(
     int NativePort,
     bool AllowActions,
     bool AllowUnsafe,
-    string[] DisabledTools);
+    string[] DisabledTools,
+    int GameProcessID = 0,
+    string InstanceID = "");

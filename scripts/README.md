@@ -24,6 +24,30 @@ pwsh -NoProfile -File ./build.ps1 -DotNet (Get-Command dotnet).Source -DalamudHo
 
 本机配置只改变插件的普通编译输出。网关仍在项目的编译目录生成；要更新插件旁的单文件网关，请用 `build.ps1`。没有本机配置时，普通编译仍使用各项目的默认输出目录。
 
+## 选择游戏实例
+
+脚本仅依赖 Python 标准库，Windows 下自动读取当前用户的 MCP 令牌，不需要把令牌写进命令。
+
+```powershell
+python scripts/mcp_client.py instances
+python scripts/mcp_client.py --pid 12345 call get_session_status
+python scripts/mcp_client.py --instance <实例ID> call get_player_context
+python scripts/mcp_client.py --pid 12345 list --filter log --schemas
+```
+
+把 `12345` 或实例 ID 替换为 `instances` 输出的目标值。多实例时必须明确选择；不存在的目标、身份变化和已退出的实例都会报错。`--instance` 固定本次插件加载，`--pid` 固定游戏进程。显式 `--url` 适合手动连接，不能与实例选择参数混用。`call` 支持 `--arguments-file <JSON文件>`；使用 `--server exd` 可连接本机 EXDViewer。
+
+## 多开回归检查
+
+在 Windows 上从仓库根目录执行以下命令。C# 检查会启动模拟游戏管道、原生端点及三个并发网关，不需要运行游戏；Python 检查模拟发现与调用结果。
+
+```powershell
+dotnet run --project tests/DalamudMCP.Tests/DalamudMCP.Tests.csproj -c Release -- "$PWD/src/DalamudMCP.Server/bin/Release/net10.0/win-x64/DalamudMCP.Server.dll"
+python tests/test_client_selection.py
+```
+
+覆盖端口占用与并发启动、实例发现、目标退出、原生 PID 校验、默认日志路径隔离，以及多实例选择歧义和端点身份变化。卫月内部宿主与日志适配仍须在实际游戏中验证。
+
 ## 核对运行构建
 
 1. 连接后，调用 `read_development_workflow` 查看当前运行构建附带的验收流程，再用 `get_dev_build` 核对目标插件登记的 DLL 路径。
