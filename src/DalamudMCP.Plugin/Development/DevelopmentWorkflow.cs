@@ -10,7 +10,7 @@ internal static class DevelopmentWorkflow
         # DalamudMCP 开发验收
 
         1. 先用 `get_session_status` 核对会话，再用 `get_dev_build` 核对登记路径。独立编译后读取本次 DLL 的 MVID。
-        2. 使用 `wait_for_dev_build` 核对加载路径和 MVID，要求 `status=ready` 且 `buildVerified=true`。首次注册和手动重载需有授权。网关重载后重新连接并列出工具。
+        2. 使用 `wait_for_dev_build` 核对加载路径和 MVID，要求 `status=ready` 且 `buildVerified=true`。首次注册时，仅在获得授权且信任 DLL 后调用 `load_dev_dll`，传入本次产物的 MVID。手动重载也需授权。网关重载后重新连接并列出工具。
         3. 使用 `get_dalamud_log` 查运行故障，按场景独立回读窗口、控件或游戏状态。派发成功不代表操作生效；超时后先查状态。
         4. 客户端数据先核对语言、表名及行号。默认只观察连接元数据；需要采集载荷时按授权限定范围。
         """;

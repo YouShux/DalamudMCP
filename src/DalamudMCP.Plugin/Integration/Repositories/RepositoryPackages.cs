@@ -28,16 +28,18 @@ internal sealed partial class RepositoryPackages(GameServices services, Cancella
         {
             var (manifest, repo) = item;
             var name = api.InternalName(manifest);
+            var url = api.Text(repo, "PluginMasterUrl");
+            var apiLevel = api.Value(manifest, "DalamudApiLevel");
             return new
             {
                 internalName = name,
                 name = api.Text(manifest, "Name"),
-                repositoryUrl = VisibleRepositoryURL(api.Text(repo, "PluginMasterUrl")),
+                repositoryUrl = VisibleRepositoryURL(url),
                 version = api.Value(manifest, "AssemblyVersion")?.ToString(),
-                apiLevel = api.Value(manifest, "DalamudApiLevel"),
+                apiLevel,
                 testingVersion = api.Value(manifest, "TestingAssemblyVersion")?.ToString(),
-                testingApiLevel = api.Value(manifest, "TestingDalamudApiLevel") ?? api.Value(manifest, "DalamudApiLevel"),
-                ready = ready.Contains(repo) && IsUsableRepositoryURL(api.Text(repo, "PluginMasterUrl")),
+                testingApiLevel = api.Value(manifest, "TestingDalamudApiLevel") ?? apiLevel,
+                ready = ready.Contains(repo) && IsUsableRepositoryURL(url),
                 stable = api.Value(manifest, "IsTestingExclusive") is false,
                 installed = installed.Contains(name),
             };
@@ -47,7 +49,7 @@ internal sealed partial class RepositoryPackages(GameServices services, Cancella
             .OrderBy(row => row.internalName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.repositoryUrl, StringComparer.Ordinal).Skip(offset).Take(limit + 1).ToArray();
         return new { repositoryCatalogReady = api.Value(manager, "ReposReady") is true, testingAllowed = api.TestingAllowed,
-            items = rows.Take(limit).ToArray(),
+            items = rows.Length > limit ? rows[..limit] : rows,
             nextOffset = rows.Length > limit ? offset + limit : (int?)null };
     }
 

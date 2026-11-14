@@ -18,7 +18,7 @@ internal static class GameScreenshot
     private static readonly TimeSpan CacheLifetime = TimeSpan.FromSeconds(60);
 
     internal static async Task<JsonElement> CaptureAsync(GameServices services, ScreenshotViewport? viewport, Func<ScreenshotViewport?> readViewport, ToolArguments input,
-        CancellationToken cancellationToken)
+        bool structuredOnly, CancellationToken cancellationToken)
     {
         var includeUi = input.Boolean("include_dalamud_ui", true);
         var maxDimension = input.Integer("max_dimension", 1920, 256, 2560);
@@ -26,31 +26,31 @@ internal static class GameScreenshot
         var crop = input.Has("crop") ? RenderCrop.Parse(input.Element("crop")) : (RenderCrop?)null;
         var reference = input.Has("screenshot_id") ? RepositoryPackages.ParseID(input.Text("screenshot_id")) : (Guid?)null;
         if (reference.HasValue && input.Has("include_dalamud_ui")) throw new ArgumentException("缓存帧的界面内容不能更改。");
-        if (viewport is null && !reference.HasValue) return ToolJson.Success(new { status = "no_render_frame" });
-        if (!CaptureSlot.Wait(0)) return ToolJson.Success(new { status = "busy" });
+        if (viewport is null && !reference.HasValue) return ToolJson.Success(new { status = "no_render_frame" }, structuredOnly);
+        if (!CaptureSlot.Wait(0)) return ToolJson.Success(new { status = "busy" }, structuredOnly);
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(timeout);
         try
         {
-            return await CaptureFrameAsync(services, viewport, readViewport, includeUi, maxDimension, crop, reference, deadline.Token)
+            return await CaptureFrameAsync(services, viewport, readViewport, includeUi, maxDimension, crop, reference, structuredOnly, deadline.Token)
                 .WaitAsync(deadline.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return ToolJson.Success(new { status = "timeout" });
+            return ToolJson.Success(new { status = "timeout" }, structuredOnly);
         }
     }
 
     private static async Task<JsonElement> CaptureFrameAsync(GameServices services, ScreenshotViewport? viewport, Func<ScreenshotViewport?> readViewport, bool includeUi,
-        int maxDimension, RenderCrop? crop, Guid? reference, CancellationToken token)
+        int maxDimension, RenderCrop? crop, Guid? reference, bool structuredOnly, CancellationToken token)
     {
         try
         {
             var now = DateTimeOffset.UtcNow;
             while (Frames.TryPeek(out var oldest) && now - oldest.CapturedAt >= CacheLifetime) Frames.Dequeue();
             var cached = reference.HasValue ? Frames.FirstOrDefault(item => item.ID == reference.Value) : null;
-            if (reference.HasValue && cached is null) return ToolJson.Success(new { status = "screenshot_not_found" });
+            if (reference.HasValue && cached is null) return ToolJson.Success(new { status = "screenshot_not_found" }, structuredOnly);
             using var frame = cached is null
                 ? await services.Textures.CreateFromImGuiViewportAsync(new ImGuiViewportTextureArgs
                 {
@@ -64,9 +64,9 @@ internal static class GameScreenshot
 
             var width = frame.Width;
             var height = frame.Height;
-            if (width <= 0 || height <= 0) return ToolJson.Success(new { status = "no_render_frame" });
+            if (width <= 0 || height <= 0) return ToolJson.Success(new { status = "no_render_frame" }, structuredOnly);
             var region = crop ?? new(0, 0, width, height);
-            if (!region.Fits(width, height)) return ToolJson.Success(new { status = "crop_out_of_bounds", sourceWidth = width, sourceHeight = height });
+            if (!region.Fits(width, height)) return ToolJson.Success(new { status = "crop_out_of_bounds", sourceWidth = width, sourceHeight = height }, structuredOnly);
             var longest = Math.Max(region.Width, region.Height);
             var capped = Math.Min(longest, maxDimension);
             using var scaled = crop is null && longest <= maxDimension ? null : await services.Textures.CreateFromExistingTextureAsync(frame,
@@ -83,12 +83,12 @@ internal static class GameScreenshot
             await services.TextureReadback.SaveToStreamAsync(image, PngFormat, stream, leaveWrapOpen: true,
                 leaveStreamOpen: true, cancellationToken: token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
-            if (stream.Length == 0) return ToolJson.Success(new { status = "empty_image" });
+            if (stream.Length == 0) return ToolJson.Success(new { status = "empty_image" }, structuredOnly);
             var screenshotID = cached?.ID;
             if (!reference.HasValue && (long)width * height * 4 <= CACHE_BYTES)
             {
                 byte[] png;
-                if (scaled is null) png = stream.ToArray();
+                if (scaled is null) png = stream.Length <= CACHE_BYTES ? stream.ToArray() : [];
                 else
                 {
                     using var original = new MemoryStream();

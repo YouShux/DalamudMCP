@@ -6,7 +6,8 @@
 
 | 要查什么 | 调用方式 | 返回内容 |
 | --- | --- | --- |
-| 当前角色及所在位置 | `get_player_context`，参数为 `{}` | 角色、职业、等级、区域、世界坐标、是否在战斗及当前目标。 |
+| 当前区域、职业和坐标 | `get_player_context`，参数为 `{"compact":true}` | `territoryName`、`jobName` 和 `position`（世界坐标 `x/y/z`）。 |
+| 完整角色状态 | `get_player_context`，参数为 `{}` | 角色、职业、等级、区域、世界坐标、是否在战斗及当前目标。 |
 | 属性与职业进度 | `inspect_character_stats` 或 `inspect_job_progress`，参数为 `{}` | 当前面板属性、同步等级与客户端条件，或各职业等级及经验。 |
 | 队伍与状态效果 | `inspect_party_roster`，例如 `{"include_effects":true}` | 客户端可见的队伍或团队成员、职业、区域、HP、MP 和可读取的状态。 |
 | 本人或某个目标的状态 | `inspect_actor_effects`，例如 `{"actor":"focus"}` | 可用 `self`、`current`、`focus` 选择本人、当前目标或焦点目标。 |

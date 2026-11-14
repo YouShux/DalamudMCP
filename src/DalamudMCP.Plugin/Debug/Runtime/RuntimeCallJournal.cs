@@ -5,7 +5,7 @@ namespace DalamudMCP.Plugin.Tools;
 internal sealed class RuntimeCallJournal
 {
     private readonly object sync = new();
-    private readonly Queue<Entry> entries = new();
+    private readonly Entry?[] entries = new Entry?[100];
     private readonly Guid instance = Guid.NewGuid();
     private long sequence;
     private int frameworkThread;
@@ -16,8 +16,8 @@ internal sealed class RuntimeCallJournal
     {
         lock (sync)
         {
-            if (entries.Count == 100) entries.Dequeue();
-            entries.Enqueue(new(++sequence, tool, DateTimeOffset.UtcNow, Environment.TickCount64 - started, status));
+            var index = (int)(sequence % entries.Length);
+            entries[index] = new(++sequence, tool, DateTimeOffset.UtcNow, Environment.TickCount64 - started, status);
         }
     }
 
@@ -30,9 +30,19 @@ internal sealed class RuntimeCallJournal
         {
             if (input.Has("stream_id") && (!Guid.TryParse(input.Text("stream_id"), out var expected) || expected != instance))
                 return new { status = "stream_changed", streamID = instance };
-            var page = entries.Where(entry => entry.Sequence > after).Take(limit).ToArray();
-            return new { status = after > 0 && entries.TryPeek(out var first) && after < first.Sequence - 1 ? "history_truncated" : "ok",
-                streamID = instance, records = page, afterSequence = page.LastOrDefault()?.Sequence ?? after, latestSequence = sequence };
+            var earliest = Math.Max(1, sequence - entries.Length + 1);
+            var first = Math.Max(after, earliest - 1);
+            var count = first < sequence ? (int)Math.Min(limit, sequence - first) : 0;
+            var page = count == 0 ? [] : new Entry[count];
+            if (count > 0)
+            {
+                var index = (int)(first % entries.Length);
+                var tail = Math.Min(count, entries.Length - index);
+                Array.Copy(entries, index, page, 0, tail);
+                if (tail < count) Array.Copy(entries, 0, page, tail, count - tail);
+            }
+            return new { status = after > 0 && after < earliest - 1 ? "history_truncated" : "ok",
+                streamID = instance, records = page, afterSequence = count > 0 ? first + count : after, latestSequence = sequence };
         }
     }
 

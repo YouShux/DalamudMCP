@@ -144,7 +144,11 @@ internal sealed partial class GameDiagnostics
                 damageEffects = e.Effects.Where(v => v.Type is 3 or 4 or 5 or 6).Select(DecodeEffect).ToArray(),
                 poseSampleMs = pose is null ? null : frame?.ElapsedMs, position = pose, overlappingRuleIDs = overlapping };
         }).ToArray();
-        var events = observed.Where(e => e.ElapsedMs >= start && e.ElapsedMs < end).ToArray();
+        var eventStart = FindReplayEventBoundary(observed, start);
+        var eventCount = FindReplayEventBoundary(observed, end) - eventStart;
+        var pageStart = eventStart + Math.Min(offset, eventCount);
+        var pageLength = Math.Min(limit, Math.Max(0, eventCount - offset));
+        var events = observed[pageStart..(pageStart + pageLength)];
         var gridRows = grid is null ? [] : hazards.Where(h => h.Until > 0 && h.From < REPLAY_TIME_LIMIT)
             .OrderBy(h => h.From).Take(65).ToArray();
         var gridHazards = gridRows.Take(64).Select(h => new
@@ -162,8 +166,8 @@ internal sealed partial class GameDiagnostics
             archive.Truncated, archive.EvidenceTruncated, archive.ActivityTruncated, archive.ActionEffectsTruncated,
             archive.MechanicSources, archive.ActionEffectCoverage, poseFrames = poseFrames.Length,
             rulesWithoutObservation = rules.Where(r => !matchedRules.Contains(r.ID)).Select(r => r.ID).ToArray(),
-            unresolvedRules = unresolved, hazardsClipped = clipped, eventCount = events.Length, hazardCount = hazards.Count,
-            damageCount = effects.Length, events = events.Skip(offset).Take(limit).ToArray(), hazards = hazardsPage, damage,
+            unresolvedRules = unresolved, hazardsClipped = clipped, eventCount, hazardCount = hazards.Count,
+            damageCount = effects.Length, events, hazards = hazardsPage, damage,
             gridInput = grid is null ? null : new
             {
                 rows, columns = cols,
@@ -174,7 +178,7 @@ internal sealed partial class GameDiagnostics
             gridHazardsClipped = gridRows.Length > 64 || clipped,
             gridHazardCoverage = "explicit_cells_and_conservative_shape_overlap",
             gridInputIncomplete = incomplete,
-            nextOffset = offset + limit < Math.Max(events.Length, Math.Max(hazards.Count, effects.Length)) ? (int?)offset + limit : null,
+            nextOffset = offset + limit < Math.Max(eventCount, Math.Max(hazards.Count, effects.Length)) ? (int?)offset + limit : null,
             coverage = "archive_observations_and_supplied_rules", poseMaxAgeMs = 250,
             damageInterpretation = "time_and_position_overlap_not_causality",
         };
@@ -316,6 +320,19 @@ internal sealed partial class GameDiagnostics
         var (row, col) = grid.ToGrid(pose.X, pose.Z);
         return row >= 0 && row < rows && col >= 0 && col < columns &&
             Array.BinarySearch(hazard.Cells, (int)row * columns + (int)col) >= 0;
+    }
+
+    private static int FindReplayEventBoundary(ReplayEvent[] events, long time)
+    {
+        var start = 0;
+        var end = events.Length;
+        while (start < end)
+        {
+            var middle = start + (end - start) / 2;
+            if (events[middle].ElapsedMs < time) start = middle + 1;
+            else end = middle;
+        }
+        return start;
     }
 
     private static CombatFrame? LatestFrame(CombatFrame[] frames, long tick)

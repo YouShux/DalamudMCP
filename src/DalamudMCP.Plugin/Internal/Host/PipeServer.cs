@@ -95,21 +95,41 @@ public sealed class PipeServer : IDisposable
     {
         if (request.Method == "settings") return ToolJson.Element(settings.Snapshot);
         if (request.Method == "tools/list") return ToolJson.Element(new ToolCatalog([.. tools.Tools], settings.Snapshot));
-        if (request.Method != "tools/call") throw new InvalidOperationException("未知管道方法。");
-        var tool = tools.Tools.FirstOrDefault(tool => tool.Name == request.Name)
-            ?? throw new InvalidOperationException("工具不存在。");
-        if (!IsAllowed())
-            return ToolJson.Error("工具未启用，请在 DalamudMCP 设置中调整权限。");
+        var route = request.Method == "tools/route";
+        if (!route && request.Method != "tools/call") throw new InvalidOperationException("未知管道方法。");
+        var tool = tools.Tools.FirstOrDefault(tool => tool.Name == request.Name);
+        if (tool is null)
+        {
+            if (!route) throw new InvalidOperationException("工具不存在。");
+            return ToolJson.Element(new GameToolRoute(NativeSettings: settings.Snapshot));
+        }
+        var access = settings.Snapshot;
+        if (access.DisabledTools.Contains(tool.Name, StringComparer.Ordinal))
+            return Wrap(ToolJson.Error(route ? "此工具已禁用。" : "工具未启用，请在 DalamudMCP 设置中调整权限。"));
+        if (!HasAccess(access))
+        {
+            var error = route ? "此操作所需权限尚未开启，请在 DalamudMCP 设置中确认。"
+                : "工具未启用，请在 DalamudMCP 设置中调整权限。";
+            return Wrap(ToolJson.Error(error));
+        }
         cancellationToken.ThrowIfCancellationRequested();
-        return await tools.CallAsync(tool.Name, request.Arguments, IsAllowed, cancellationToken).ConfigureAwait(false);
+        return Wrap(await tools.CallAsync(tool, request.Arguments, request.StructuredOnly, IsAllowed, cancellationToken).ConfigureAwait(false));
+
+        JsonElement Wrap(JsonElement result) => route ? ToolJson.Element(new GameToolRoute(result)) : result;
 
         bool IsAllowed()
         {
-            var access = settings.Snapshot;
-            return !access.DisabledTools.Contains(tool.Name, StringComparer.Ordinal)
-                && (tool.Access != ToolAccess.Action || access.AllowActions)
-                && (tool.Access != ToolAccess.Unsafe || access.AllowUnsafe);
+            var current = settings.Snapshot;
+            return !current.DisabledTools.Contains(tool.Name, StringComparer.Ordinal) && HasAccess(current);
         }
+
+        bool HasAccess(BridgeSettings current) => tool.Access switch
+        {
+            ToolAccess.Read => true,
+            ToolAccess.Action => current.AllowActions,
+            ToolAccess.Unsafe => current.AllowUnsafe,
+            _ => false,
+        };
     }
 
     public void Dispose()

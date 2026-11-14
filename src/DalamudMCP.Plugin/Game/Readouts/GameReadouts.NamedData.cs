@@ -155,8 +155,13 @@ internal sealed partial class GameReadouts
             return new { rowID = type.GetProperty("RowId")?.GetValue(value) };
         if (depth < 2 && value is IEnumerable items)
         {
-            var projected = items.Cast<object?>().Take(33).Select(item => Project(item, depth + 1)).ToArray();
-            return new { values = projected.Take(32).ToArray(), truncated = projected.Length > 32 };
+            var values = new List<object?>();
+            foreach (var item in items)
+            {
+                if (values.Count == 32) return new { values, truncated = true };
+                values.Add(Project(item, depth + 1));
+            }
+            return new { values, truncated = false };
         }
         if (depth < 2 && type.Assembly == typeof(ClientAction).Assembly && type.IsValueType)
             return type.GetProperties(BindingFlags.Instance | BindingFlags.Public)

@@ -1,10 +1,12 @@
 using System.Globalization;
 using System.Numerics;
+using System.Text.Json;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Game.DutyState;
 using Dalamud.Game.Inventory;
+using DalamudMCP.Shared;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
@@ -29,6 +31,8 @@ internal sealed unsafe partial class GameState : IDisposable
     internal bool HasDutyCompletion(long after, uint territory, uint duty) =>
         dutyCompletionSequence > after && lastDutyCompletion == (territory, duty);
     private long territoryGeneration;
+    private ((uint TerritoryID, uint JobID, int Language) Key, string? TerritoryName, string? JobName)? playerPlaceAndJob;
+    private ((string? Territory, string? Job, Vector3 Position, bool StructuredOnly) State, JsonElement Result)? compactPlayer;
 
     internal long TerritoryGeneration => Volatile.Read(ref territoryGeneration);
 
@@ -64,13 +68,13 @@ internal sealed unsafe partial class GameState : IDisposable
         Interlocked.Increment(ref territoryGeneration);
     }
 
-    public object Call(string name, ToolArguments arguments)
+    public object Call(string name, ToolArguments arguments, bool structuredOnly)
     {
         if (!services.ClientState.IsLoggedIn || services.ObjectTable.LocalPlayer is null)
             throw new InvalidOperationException("角色尚未登录或未准备就绪。");
         return name switch
         {
-            "get_player_context" => Player(),
+            "get_player_context" => Player(arguments.Boolean("compact"), structuredOnly),
             "get_duty_context" => Duty(),
             "get_inventory_summary" => Inventory(),
             "get_fate_context" => Fates(arguments),
@@ -88,25 +92,47 @@ internal sealed unsafe partial class GameState : IDisposable
         };
     }
 
-    private object Player()
+    private object Player(bool compact, bool structuredOnly)
     {
         var player = services.ObjectTable.LocalPlayer ?? throw new InvalidOperationException("角色尚未准备就绪。");
+        var territoryID = services.ClientState.TerritoryType;
+        var job = player.ClassJob;
+        var key = (territoryID, job.RowId, (int)services.ClientState.ClientLanguage);
+        if (playerPlaceAndJob is not { } names || names.Key != key)
+        {
+            names = (key, services.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(territoryID)?.PlaceName.ValueNullable?.Name.ToString(),
+                job.ValueNullable?.Name.ToString());
+            if (names.TerritoryName is not null && names.JobName is not null)
+                playerPlaceAndJob = names;
+        }
+        var (_, territoryName, jobName) = names;
+        var coordinates = player.Position;
+        if (compact)
+        {
+            var snapshot = (territoryName, jobName, coordinates, structuredOnly);
+            if (compactPlayer is { } previous && snapshot == previous.State)
+                return previous.Result;
+            var result = ToolJson.Success(new { territoryName, jobName, position = Position(coordinates) }, structuredOnly);
+            compactPlayer = (snapshot, result);
+            return result;
+        }
+
         return new
         {
             characterName = player.Name.TextValue,
             gameObjectID = $"0x{player.GameObjectId:X}",
             homeWorld = player.HomeWorld.ValueNullable?.Name.ToString(),
             currentWorld = player.CurrentWorld.ValueNullable?.Name.ToString(),
-            jobID = player.ClassJob.RowId,
-            jobName = player.ClassJob.ValueNullable?.Name.ToString(),
+            jobID = job.RowId,
+            jobName,
             jobLevel = player.Level,
             currentHP = player.CurrentHp,
             maxHP = player.MaxHp,
             currentMP = player.CurrentMp,
             maxMP = player.MaxMp,
-            territoryID = services.ClientState.TerritoryType,
-            territoryName = services.DataManager.GetExcelSheet<TerritoryType>().GetRowOrDefault(services.ClientState.TerritoryType)?.PlaceName.ValueNullable?.Name.ToString(),
-            position = Position(player.Position),
+            territoryID,
+            territoryName,
+            position = Position(coordinates),
             rotation = player.Rotation,
             inCombat = services.Condition[ConditionFlag.InCombat],
             target = services.TargetManager.Target is { } target ? ObjectSnapshot(target) : null,
@@ -134,26 +160,32 @@ internal sealed unsafe partial class GameState : IDisposable
         var gil = 0;
         foreach (var type in Enum.GetValues<GameInventoryType>())
         {
-            if (!type.ToString().StartsWith("Inventory", StringComparison.Ordinal) &&
-                !type.ToString().StartsWith("Armory", StringComparison.Ordinal) &&
+            var container = type.ToString();
+            if (!container.StartsWith("Inventory", StringComparison.Ordinal) &&
+                !container.StartsWith("Armory", StringComparison.Ordinal) &&
                 type is not GameInventoryType.EquippedItems and not GameInventoryType.Currency and not GameInventoryType.Crystals)
                 continue;
-            var items = services.GameInventory.GetInventoryItems(type).ToArray();
+            var slots = services.GameInventory.GetInventoryItems(type);
+            var items = new List<object>();
+            foreach (var item in slots)
+            {
+                if (item.IsEmpty)
+                    continue;
+                if (type == GameInventoryType.Currency && item.BaseItemId == 1)
+                    gil = item.Quantity;
+                items.Add(new { itemID = item.ItemId, baseItemID = item.BaseItemId, quantity = item.Quantity });
+            }
             if (type is GameInventoryType.Inventory1 or GameInventoryType.Inventory2 or GameInventoryType.Inventory3 or GameInventoryType.Inventory4)
             {
-                totalSlots += items.Length;
-                occupiedSlots += items.Count(item => !item.IsEmpty);
+                totalSlots += slots.Length;
+                occupiedSlots += items.Count;
             }
-            if (type == GameInventoryType.Currency)
-                foreach (var item in items)
-                    if (!item.IsEmpty && item.BaseItemId == 1)
-                        gil = item.Quantity;
             containers.Add(new
             {
-                container = type.ToString(),
-                totalSlots = items.Length,
-                occupiedSlots = items.Count(item => !item.IsEmpty),
-                items = items.Where(item => !item.IsEmpty).Select(item => new { itemID = item.ItemId, baseItemID = item.BaseItemId, quantity = item.Quantity }).ToArray(),
+                container,
+                totalSlots = slots.Length,
+                occupiedSlots = items.Count,
+                items,
             });
         }
         return new { currencyGil = gil, occupiedSlots, totalSlots, containers };
@@ -163,38 +195,59 @@ internal sealed unsafe partial class GameState : IDisposable
     {
         var position = services.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
         var distance = arguments.Number("max_distance", 120, 1, 1000);
+        var maxDistanceSquared = distance * distance;
         var filter = arguments.Text("name_contains", string.Empty);
         return services.FateTable.Where(fate => fate is not null)
-            .Where(fate => Vector3.DistanceSquared(fate.Position, position) <= distance * distance && fate.Name.TextValue.Contains(filter, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(fate => Vector3.DistanceSquared(fate.Position, position)).Take(64)
-            .Select(fate => new
+            .Select(fate =>
             {
-                fateID = fate.FateId,
-                name = fate.Name.TextValue,
-                state = fate.State.ToString(),
-                level = fate.Level,
-                progressPercent = fate.Progress,
-                timeRemainingSeconds = fate.TimeRemaining,
-                hasBonus = fate.HasBonus,
-                position = Position(fate.Position),
-                distance = Vector3.Distance(position, fate.Position),
-                objective = fate.Objective.TextValue,
-                description = fate.Description.TextValue,
+                var fatePosition = fate.Position;
+                return (Fate: fate, Position: fatePosition, DistanceSquared: Vector3.DistanceSquared(fatePosition, position));
+            })
+            .Where(entry => entry.DistanceSquared <= maxDistanceSquared && (filter.Length == 0 || entry.Fate.Name.TextValue.Contains(filter, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(entry => entry.DistanceSquared).Take(64)
+            .Select(entry => new
+            {
+                fateID = entry.Fate.FateId,
+                name = entry.Fate.Name.TextValue,
+                state = entry.Fate.State.ToString(),
+                level = entry.Fate.Level,
+                progressPercent = entry.Fate.Progress,
+                timeRemainingSeconds = entry.Fate.TimeRemaining,
+                hasBonus = entry.Fate.HasBonus,
+                position = Position(entry.Position),
+                distance = float.Sqrt(entry.DistanceSquared),
+                objective = entry.Fate.Objective.TextValue,
+                description = entry.Fate.Description.TextValue,
             }).ToArray();
     }
 
     private IGameObject[] Nearby(ToolArguments arguments)
     {
-        var position = services.ObjectTable.LocalPlayer?.Position ?? Vector3.Zero;
+        var player = services.ObjectTable.LocalPlayer;
+        var position = player?.Position ?? Vector3.Zero;
+        var playerID = player?.GameObjectId;
         var distance = arguments.Number("max_distance", 50, 1, 1000);
+        var maxDistanceSquared = distance * distance;
         var filter = arguments.Text("name_contains", string.Empty);
         var includePlayers = arguments.Boolean("include_players");
-        return services.ObjectTable.Where(gameObject => gameObject.IsTargetable &&
-                (includePlayers || gameObject is not IPlayerCharacter) &&
-                gameObject.GameObjectId != services.ObjectTable.LocalPlayer?.GameObjectId &&
-                Vector3.DistanceSquared(gameObject.Position, position) <= distance * distance &&
-                gameObject.Name.TextValue.Contains(filter, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(gameObject => Vector3.DistanceSquared(gameObject.Position, position)).Take(128).ToArray();
+        var candidates = new List<(IGameObject Object, float DistanceSquared, int Order)>();
+        foreach (var gameObject in services.ObjectTable)
+        {
+            if (!gameObject.IsTargetable || (!includePlayers && gameObject is IPlayerCharacter) || gameObject.GameObjectId == playerID)
+                continue;
+            var distanceSquared = Vector3.DistanceSquared(gameObject.Position, position);
+            if (distanceSquared <= maxDistanceSquared && (filter.Length == 0 || gameObject.Name.TextValue.Contains(filter, StringComparison.OrdinalIgnoreCase)))
+                candidates.Add((gameObject, distanceSquared, candidates.Count));
+        }
+        candidates.Sort(static (left, right) =>
+        {
+            var comparison = left.DistanceSquared.CompareTo(right.DistanceSquared);
+            return comparison != 0 ? comparison : left.Order.CompareTo(right.Order);
+        });
+        var result = new IGameObject[Math.Min(candidates.Count, 128)];
+        for (var i = 0; i < result.Length; i++)
+            result[i] = candidates[i].Object;
+        return result;
     }
 
     private object ObjectSnapshot(IGameObject gameObject) => new
@@ -355,55 +408,119 @@ internal sealed unsafe partial class GameState : IDisposable
         var agent = AgentMap.Instance();
         if (manager == null || map == null || agent == null)
             throw new InvalidOperationException("任务追踪系统未准备就绪。");
-        var quests = new List<object>();
-        foreach (var tracking in manager->TrackedQuests)
+
+        var tracked = manager->TrackedQuests;
+        Span<uint> ids = stackalloc uint[tracked.Length];
+        Span<byte> sequences = stackalloc byte[tracked.Length];
+        Span<bool> normal = stackalloc bool[tracked.Length];
+        var count = 0;
+        foreach (var tracking in tracked)
         {
             uint id;
             byte sequence;
-            string kind;
-            if (tracking.QuestType == 1 && tracking.Index < manager->NormalQuests.Length)
+            var isNormal = tracking.QuestType == 1;
+            if (isNormal && tracking.Index < manager->NormalQuests.Length)
             {
-                var work = manager->NormalQuests[tracking.Index];
+                ref var work = ref manager->NormalQuests[tracking.Index];
                 id = work.QuestId;
                 sequence = work.Sequence;
-                kind = "normal";
             }
             else if (tracking.QuestType == 2 && tracking.Index < manager->LeveQuests.Length)
             {
-                var work = manager->LeveQuests[tracking.Index];
+                ref var work = ref manager->LeveQuests[tracking.Index];
                 id = work.LeveId;
                 sequence = work.Sequence;
-                kind = "leve";
             }
             else
                 continue;
             if (id == 0)
                 continue;
-            var markers = new List<object>();
-            foreach (var marker in map->QuestMarkers)
-            {
-                if (!marker.ShouldRender)
-                    continue;
-                var matches = marker.ObjectiveId == id;
-                foreach (var data in marker.MarkerData)
-                    matches |= data.ObjectiveId == id;
-                if (matches)
-                    markers.Add(MarkerSnapshot(marker));
-            }
-            var links = new List<object>();
-            AppendLinks(agent->MapQuestLinkContainer.Markers, id, "map", links);
-            AppendLinks(agent->MiniMapQuestLinkContainer.Markers, id, "minimap", links);
+            ids[count] = id;
+            sequences[count] = sequence;
+            normal[count++] = isNormal;
+        }
+
+        var quests = new List<object>();
+        if (count == 0)
+            return new { territoryID = services.ClientState.TerritoryType, quests };
+
+        var markers = map->QuestMarkers;
+        var mapLinks = agent->MapQuestLinkContainer.Markers;
+        var miniLinks = agent->MiniMapQuestLinkContainer.Markers;
+        Span<ulong> markerMasks = stackalloc ulong[count];
+        Span<ulong> mapMasks = stackalloc ulong[count];
+        Span<ulong> miniMasks = stackalloc ulong[count];
+        GroupQuestLocations(ids[..count], markers, mapLinks, miniLinks, markerMasks, mapMasks, miniMasks);
+
+        var sheet = normal[..count].IndexOf(true) >= 0 ? services.DataManager.GetExcelSheet<Quest>() : null;
+        for (var i = 0; i < count; i++)
+        {
+            var id = ids[i];
+            var matchingMarkers = new List<object>();
+            for (var mask = markerMasks[i]; mask != 0; mask &= mask - 1)
+                matchingMarkers.Add(MarkerSnapshot(markers[BitOperations.TrailingZeroCount(mask)]));
+            var matchingLinks = new List<object>();
+            AppendQuestLinks(mapLinks, mapMasks[i], "map", matchingLinks);
+            AppendQuestLinks(miniLinks, miniMasks[i], "minimap", matchingLinks);
             quests.Add(new
             {
                 questID = id,
-                questName = kind == "normal" ? services.DataManager.GetExcelSheet<Quest>().GetRowOrDefault(id | 0x10000)?.Name.ToString() : null,
-                kind,
-                sequence,
-                markers,
-                links,
+                questName = normal[i] ? sheet?.GetRowOrDefault(id | 0x10000)?.Name.ToString() : null,
+                kind = normal[i] ? "normal" : "leve",
+                sequence = sequences[i],
+                markers = matchingMarkers,
+                links = matchingLinks,
             });
         }
         return new { territoryID = services.ClientState.TerritoryType, quests };
+    }
+
+    private static void GroupQuestLocations(ReadOnlySpan<uint> ids, Span<MarkerInfo> markers,
+        Span<QuestLinkMarker> mapLinks, Span<QuestLinkMarker> miniLinks, Span<ulong> markerMasks, Span<ulong> mapMasks, Span<ulong> miniMasks)
+    {
+        markerMasks.Clear();
+        if (markers.Length > 64 || mapLinks.Length > 64 || miniLinks.Length > 64)
+            throw new InvalidOperationException("当前地图标记数量超过支持范围。");
+        for (var i = 0; i < markers.Length; i++)
+        {
+            ref var marker = ref markers[i];
+            if (!marker.ShouldRender)
+                continue;
+            var bit = 1UL << i;
+            AddQuestLocation(ids, markerMasks, marker.ObjectiveId, bit);
+            foreach (var data in marker.MarkerData)
+                if (data.ObjectiveId != marker.ObjectiveId)
+                    AddQuestLocation(ids, markerMasks, data.ObjectiveId, bit);
+        }
+        GroupQuestLinks(ids, mapLinks, mapMasks);
+        GroupQuestLinks(ids, miniLinks, miniMasks);
+    }
+
+    private static void GroupQuestLinks(ReadOnlySpan<uint> ids, Span<QuestLinkMarker> markers, Span<ulong> masks)
+    {
+        masks.Clear();
+        for (var i = 0; i < markers.Length; i++)
+        {
+            ref var marker = ref markers[i];
+            if (marker.Valid != 0)
+                AddQuestLocation(ids, masks, marker.QuestId, 1UL << i);
+        }
+    }
+
+    private static void AddQuestLocation(ReadOnlySpan<uint> ids, Span<ulong> masks, uint id, ulong bit)
+    {
+        for (var i = 0; i < ids.Length; i++)
+            if (ids[i] == id)
+                masks[i] |= bit;
+    }
+
+    private static void AppendQuestLinks(Span<QuestLinkMarker> markers, ulong mask, string scope, List<object> output)
+    {
+        for (; mask != 0; mask &= mask - 1)
+        {
+            ref var marker = ref markers[BitOperations.TrailingZeroCount(mask)];
+            output.Add(new { scope, label = marker.TooltipText.ToString(), marker.SourceMapId, marker.TargetMapId, marker.LevelId });
+        }
     }
 
     private static object MarkerSnapshot(MarkerInfo marker)
@@ -412,13 +529,6 @@ internal sealed unsafe partial class GameState : IDisposable
         foreach (var data in marker.MarkerData)
             entries.Add(new { objectiveID = data.ObjectiveId, dataID = data.DataId, mapID = data.MapId, territoryID = data.TerritoryTypeId, position = Position(data.Position), radius = data.Radius });
         return new { objectiveID = marker.ObjectiveId, label = marker.Label.ToString(), entries };
-    }
-
-    private static void AppendLinks(Span<QuestLinkMarker> markers, uint id, string scope, List<object> output)
-    {
-        foreach (var marker in markers)
-            if (marker.Valid != 0 && marker.QuestId == id)
-                output.Add(new { scope, label = marker.TooltipText.ToString(), marker.SourceMapId, marker.TargetMapId, marker.LevelId });
     }
 
     private static object Position(Vector3 position) => new { position.X, position.Y, position.Z };

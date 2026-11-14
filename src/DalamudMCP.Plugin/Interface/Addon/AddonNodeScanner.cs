@@ -55,18 +55,21 @@ internal static unsafe class AddonNodeScanner
             }
         }
 
-        var visited = new HashSet<nint>();
-        ScanScope(manager, path ?? [], scopeVisible, scopeEnabled, path is null);
+        var visited = new HashSet<nint>(path is not null ? Math.Min((int)manager->NodeListCount, MAX_NODES) : 0);
+        Span<uint> componentPath = stackalloc uint[AddonNodeQuery.MAX_COMPONENT_DEPTH];
+        ScanScope(manager, componentPath, 0, scopeVisible, scopeEnabled);
         return result;
 
-        void ScanScope(AtkUldManager* scope, uint[] componentPath, bool parentVisible, bool parentEnabled, bool recurse)
+        void ScanScope(AtkUldManager* scope, Span<uint> branchPath, int depth, bool parentVisible, bool parentEnabled)
         {
             if (scope->NodeList == null && scope->NodeListCount > 0)
             {
                 result.Incomplete = true;
                 return;
             }
-            var componentIDs = new HashSet<uint>();
+            uint[]? matchedPath = null;
+            uint? firstComponentID = null;
+            HashSet<uint>? componentIDs = null;
             foreach (var item in scope->Nodes)
             {
                 if (++result.Scanned > MAX_NODES)
@@ -76,35 +79,55 @@ internal static unsafe class AddonNodeScanner
                 }
                 var node = item.Value;
                 if (node == null || !visited.Add((nint)node)) continue;
+                if (path is null && !visibleOnly && visited.Count == LARGE_SCAN_RESERVE_THRESHOLD)
+                    visited.EnsureCapacity(LARGE_SCAN_RESERVED_NODES);
                 var visible = parentVisible && IsEffectivelyVisible(node);
                 if (visibleOnly && !visible) continue;
                 var component = GetComponent(node);
                 var enabled = parentEnabled && (component == null || (node->NodeFlags & NodeFlags.Enabled) != 0);
-                var type = GetComponentType(component);
-                var typeName = type?.ToString();
                 if (!query.NodeID.HasValue || query.NodeID.Value == node->NodeId)
                 {
-                    var label = GetLabel(node, component, type);
-                    if (query.Matches(node->NodeId, label, typeName))
+                    var type = GetComponentType(component);
+                    var typeName = type?.ToString();
+                    if (query.ComponentType is null || string.Equals(query.ComponentType, typeName, StringComparison.OrdinalIgnoreCase))
                     {
-                        result.MatchCount++;
-                        if (result.Matches.Count < maxResults)
+                        var store = result.Matches.Count < maxResults;
+                        var label = store || query.Label is not null ? GetLabel(node, component, type) : null;
+                        if (query.Matches(node->NodeId, label, typeName))
                         {
-                            var nodeType = IsComponent(node) ? NodeType.Component : node->Type;
-                            bool? isChecked = type == ComponentType.CheckBox && component != null
-                                ? ((AtkComponentCheckBox*)component)->IsChecked : null;
-                            result.Matches.Add(new((nint)node, new(node->NodeId, componentPath, nodeType.ToString(), typeName, label, visible, enabled, isChecked)));
+                            result.MatchCount++;
+                            if (store)
+                            {
+                                var nodeType = IsComponent(node) ? NodeType.Component : node->Type;
+                                bool? isChecked = type == ComponentType.CheckBox && component != null
+                                    ? ((AtkComponentCheckBox*)component)->IsChecked : null;
+                                result.Matches.Add(new((nint)node, new(node->NodeId, matchedPath ??= path ?? branchPath[..depth].ToArray(), nodeType.ToString(), typeName, label, visible, enabled, isChecked)));
+                            }
                         }
                     }
                 }
-                if (!recurse || component == null) continue;
-                if (componentPath.Length == AddonNodeQuery.MAX_COMPONENT_DEPTH || !componentIDs.Add(node->NodeId))
+                if (path is not null || component == null) continue;
+                if (depth == branchPath.Length || !AddComponentID(node->NodeId))
                 {
                     result.Incomplete = true;
                     continue;
                 }
-                ScanScope(&component->UldManager, [.. componentPath, node->NodeId], visible, enabled, true);
+                branchPath[depth] = node->NodeId;
+                ScanScope(&component->UldManager, branchPath, depth + 1, visible, enabled);
                 if (result.Scanned > MAX_NODES) return;
+            }
+
+            bool AddComponentID(uint id)
+            {
+                if (componentIDs is not null) return componentIDs.Add(id);
+                if (firstComponentID is not uint first)
+                {
+                    firstComponentID = id;
+                    return true;
+                }
+                if (first == id) return false;
+                componentIDs = [first, id];
+                return true;
             }
         }
     }
@@ -157,5 +180,7 @@ internal static unsafe class AddonNodeScanner
     }
 
     private const int MAX_NODES = 4096;
+    private const int LARGE_SCAN_RESERVE_THRESHOLD = 400;
+    private const int LARGE_SCAN_RESERVED_NODES = 1536;
     private const ushort MIN_COMPONENT_NODE_TYPE = 1000;
 }

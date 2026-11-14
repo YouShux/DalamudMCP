@@ -22,7 +22,9 @@ internal sealed partial class GameReadouts
         var loggedIn = services.ClientState.IsLoggedIn && services.PlayerState.IsLoaded;
         var manager = supported && loggedIn && InventoryManager.Addresses.Instance.Value != 0 ? InventoryManager.Instance() : null;
         var itemSheet = services.DataManager.GetExcelSheet<Item>();
-        var rows = new List<CurrencyRow>();
+        List<CurrencyRow>? page = null;
+        var total = 0;
+        var partial = false;
         var currencyLoaded = Loaded(InventoryType.Currency);
         var amountByItem = new Dictionary<uint, long>();
         if (currencyLoaded)
@@ -89,16 +91,14 @@ internal sealed partial class GameReadouts
             if (id != 1 && id is not (20 or 21 or 22 or 25 or 27 or 29) && !index.IDs.Contains(id))
                 Add("item_" + id, id, amount, "inventory_currency");
 
-        var entries = rows.Where(row => includeZero || row.Amount is not 0 || row.WeeklyEarned > 0 || row.Availability != "available").ToArray();
-        var page = entries.Skip(offset).Take(limit).ToArray();
         return new
         {
-            status = !loggedIn ? "unavailable" : !supported ? "unsupported_sdk" : rows.Any(row => row.Availability != "available") ? "partial" : "ok",
+            status = !loggedIn ? "unavailable" : !supported ? "unsupported_sdk" : partial ? "partial" : "ok",
             sampledAt, clientLanguage = services.ClientState.ClientLanguage.ToString(),
             territoryID = services.ClientState.TerritoryType, sdkMvid = sdk.ManifestModule.ModuleVersionId,
             sdkVersion = sdk.GetName().Version?.ToString(), clientLayout = supported ? "current_cn" : "unknown",
-            grandCompanyID = companyID, entries = page, total = entries.Length, currencyContainerAvailable = currencyLoaded,
-            nextOffset = page.Length > 0 && offset + page.Length < entries.Length ? (int?)offset + page.Length : null,
+            grandCompanyID = companyID, entries = (IReadOnlyList<CurrencyRow>?)page ?? Array.Empty<CurrencyRow>(), total, currencyContainerAvailable = currencyLoaded,
+            nextOffset = offset + limit < total ? (int?)offset + limit : null,
         };
 
         bool Loaded(InventoryType type)
@@ -111,8 +111,12 @@ internal sealed partial class GameReadouts
         void Add(string key, uint id, long? amount, string source, string? reason = null,
             int? weeklyEarned = null, int? weeklyLimit = null, string? weeklyAvailability = null, string? weeklyReason = null)
         {
+            if (!amount.HasValue) partial = true;
+            if (!includeZero && amount is 0 && !(weeklyEarned > 0)) return;
+            if (total++ < offset || total > offset + limit) return;
+
             var name = itemSheet.TryGetRow(id, out var item) ? item.Name.ToString() : null;
-            rows.Add(new(key, id, name, amount, weeklyEarned, weeklyLimit, weeklyAvailability, weeklyReason,
+            (page ??= []).Add(new(key, id, name, amount, weeklyEarned, weeklyLimit, weeklyAvailability, weeklyReason,
                 amount.HasValue ? "available" : "unknown",
                 amount.HasValue ? null : !loggedIn ? "not_logged_in" : !supported ? "unsupported_sdk" :
                     reason ?? (!currencyLoaded ? "currency_container_unavailable" : "sdk_entry_unavailable"), source));

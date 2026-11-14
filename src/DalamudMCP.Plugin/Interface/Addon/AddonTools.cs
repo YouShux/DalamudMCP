@@ -18,7 +18,7 @@ internal sealed unsafe partial class AddonTools(GameServices services)
         var addonName = arguments.Text("addon_name");
         if (name == SNAPSHOT_TOOL) return NodeSnapshot(addonName, arguments, out _);
         var wrapper = services.GameGui.GetAddonByName(addonName, 1);
-        var addon = services.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        var addon = (AtkUnitBase*)wrapper.Address;
         if (name == "inspect_menu_choice")
         {
             if (!GameDiagnostics.CurrentCnLayoutKnown) return new { status = "unsupported_sdk" };

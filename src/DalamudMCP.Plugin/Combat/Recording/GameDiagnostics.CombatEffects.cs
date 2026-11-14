@@ -92,16 +92,22 @@ internal sealed partial class GameDiagnostics
         if (status != "ok") return new { status, capture.ActionEffectCoverage, capture.BuildMvid };
         var events = capture.ActionEffects!;
         var page = matches.Skip(offset).Take(limit).ToArray();
-        return new
+        var maximumGap = 0L;
+        for (var i = 1; i < matches.Length; i++)
+            maximumGap = Math.Max(maximumGap, matches[i].ObservedAtMs - matches[i - 1].ObservedAtMs);
+        return TimelinePageResult(capture, events.Length, matches.Length, page, matches.Length < 2 ? null : maximumGap, offset);
+    }
+
+    private static object TimelinePageResult(CombatCapture capture, int observed, int matched, ObservedEffect[] page, long? gap, int offset) =>
+        new
         {
             status = "ok", capture.BuildMvid, capture.CapturedAt, capture.ActionEffectCoverage,
-            capture.ActionEffectsTruncated, frameCaptureTruncated = capture.Truncated, observedEvents = events.Length,
-            matchingEvents = matches.Length, events = page, decoded = page.Select(effect => new { effect.GlobalSequence, effect.TargetIndex, effect.SourceID, effect.TargetID, effects = effect.Effects.Select(DecodeEffect).ToArray() }).ToArray(),
-            maximumObservedGapMs = matches.Length < 2 ? (long?)null : matches.Zip(matches.Skip(1), (left, right) => right.ObservedAtMs - left.ObservedAtMs).Max(),
+            capture.ActionEffectsTruncated, frameCaptureTruncated = capture.Truncated, observedEvents = observed,
+            matchingEvents = matched, events = page, decoded = page.Select(effect => new { effect.GlobalSequence, effect.TargetIndex, effect.SourceID, effect.TargetID, effects = effect.Effects.Select(DecodeEffect).ToArray() }).ToArray(),
+            maximumObservedGapMs = gap,
             capture.PartialStart,
-            nextOffset = offset + page.Length < matches.Length ? (int?)offset + page.Length : null,
+            nextOffset = offset + page.Length < matched ? (int?)offset + page.Length : null,
         };
-    }
 
     private static ObservedEffect[] MatchEffects(CombatCapture capture, EffectFilter filter, out string status)
     {

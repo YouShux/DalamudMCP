@@ -55,12 +55,18 @@ internal sealed partial class GameDiagnostics
         var kind = input.Has("kind") ? input.Text("kind") : null;
         var all = capture.Activity ?? [];
         if (all.Length > 50000) return new { status = "invalid_capture" };
-        var matches = all.Where(row => row.ElapsedMs >= from && row.ElapsedMs <= to &&
-            (actor is null || actor.Equals(row.ActorID, StringComparison.OrdinalIgnoreCase)) && (kind is null || kind == row.Kind)).ToArray();
-        return new { status = capture.Activity is null ? "not_recorded" : "ok", capture.BuildMvid, capture.PartialStart,
-            capture.ActivityTruncated, matched = matches.Length, events = matches.Skip(offset).Take(limit).ToArray(),
-            nextOffset = offset + limit < matches.Length ? (int?)offset + limit : null,
-            removalMeaning = "status_missing_or_actor_out_of_sampling_range" };
+        List<BattleActivity>? page = null;
+        var matched = 0;
+        foreach (var row in all)
+        {
+            if (row.ElapsedMs < from || row.ElapsedMs > to ||
+                actor is not null && !actor.Equals(row.ActorID, StringComparison.OrdinalIgnoreCase) || kind is not null && kind != row.Kind)
+                continue;
+            if (matched >= offset && matched < offset + limit)
+                (page ??= new(Math.Min(limit, all.Length - offset))).Add(row);
+            matched++;
+        }
+        return ActivityPageResult(capture, capture.Activity is not null, matched, page, offset, limit);
     }
 
     private sealed record BattleActorState(uint OwnerID, bool Dead, uint? Cast, BattleStatus[] Statuses);

@@ -49,9 +49,10 @@ internal readonly struct ToolArguments(JsonElement value)
 
     private bool Find(string name, out JsonElement result)
     {
+        string? normalized = null;
         foreach (var property in value.EnumerateObject())
         {
-            if (Normalize(property.Name) != Normalize(name))
+            if (!property.NameEquals(name) && Normalize(property.Name) != (normalized ??= Normalize(name)))
                 continue;
             result = property.Value;
             return true;

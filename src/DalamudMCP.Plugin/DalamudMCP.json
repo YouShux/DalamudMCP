@@ -4,7 +4,7 @@
   "InternalName": "DalamudMCP",
   "RepoUrl": "https://github.com/YouShux/DalamudMCP",
   "IconUrl": "https://raw.githubusercontent.com/YouShux/DalamudMCP/main/images/icon.png",
-  "AssemblyVersion": "1.1.0.0",
+  "AssemblyVersion": "1.1.1.0",
   "Punchline": "把许愿式编程带进《最终幻想 XIV》",
   "Description": "把许愿式编程带进《最终幻想 XIV》：对 AI 说「查一下传送费」「回看刚才的战斗」或「帮我点这个按钮」。连接 MCP 客户端后，即可用自然语言查询游戏状态、筛选卫月日志、复盘战斗和计算候选站位；开启对应权限后，还能发起传送和操作游戏界面。",
   "ApplicableVersion": "any",

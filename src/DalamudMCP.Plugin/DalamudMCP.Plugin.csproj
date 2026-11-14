@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AssemblyName>DalamudMCP</AssemblyName>
     <RootNamespace>DalamudMCP.Plugin</RootNamespace>
-    <Version>1.1.0.0</Version>
+    <Version>1.1.1.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Use_DalamudPackager>false</Use_DalamudPackager>
   </PropertyGroup>

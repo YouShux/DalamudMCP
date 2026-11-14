@@ -41,7 +41,7 @@
 | `poll_client_changes` | 分页读取登录、区域、战斗、职业、目标或角色资源变化，可按类型筛选。提供上次返回的流 ID 和序号可等待下一页。 | 只读 |
 | `get_dalamud_log` | 读取本插件加载后保留的卫月运行日志。可按来源或文本筛选；增量读取使用上次返回的 `streamId` 和 `nextAfterId`。 | 只读 |
 | `get_chat_log` | 读取插件加载后保留的最近 1000 条聊天记录。 | 只读 |
-| `get_player_context` | 读取当前角色、职业、位置及目标。 | 只读 |
+| `get_player_context` | 读取角色状态；`compact=true` 只返回区域、职业和世界坐标。 | 只读 |
 | `inspect_character_stats` | 读取当前角色的 HP、MP、采集力、制作力、同步等级、面板属性及生效的客户端条件。 | 只读 |
 | `inspect_job_progress` | 读取客户端中各职业和特职的等级、经验及当前特职。 | 只读 |
 | `inspect_character_controls` | 读取当前咏唱、硬目标、朝向、自动前进及可确认的复活来源。 | 只读 |

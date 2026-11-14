@@ -297,8 +297,10 @@ internal sealed partial class GameDiagnostics(GameServices services, GameReadout
             if (input.Has("archive_id"))
             {
                 CombatCapture? capture;
-                try { capture = LoadArchive(RepositoryPackages.ParseID(input.Text("archive_id"))); }
+                object? page;
+                try { capture = LoadArchive(RepositoryPackages.ParseID(input.Text("archive_id")), input, tool, out page); }
                 catch (Exception error) when (error is InvalidDataException or JsonException) { return new { status = "invalid_capture" }; }
+                if (page is not null) return page;
                 if (capture is null) return new { status = "not_found" };
                 if (tool == "read_combat_capture")
                 {
@@ -308,28 +310,27 @@ internal sealed partial class GameDiagnostics(GameServices services, GameReadout
                     if (legacyFull) return new { status = "ok", capture, totalFrames = capture.Frames.Length, nextOffset = (int?)null };
                     var offset = input.Integer("offset", 0, 0, 18000);
                     var limit = input.Integer("limit", 100, 1, 100);
-                    return new { status = "ok", totalFrames = capture.Frames.Length,
-                        capture = capture with { Frames = capture.Frames.Skip(offset).Take(limit).ToArray(), ActionEffects = null, Activity = null, Evidence = null },
-                        actionEffectsAvailable = capture.ActionEffects?.Length, activityAvailable = capture.Activity?.Length,
-                        nextOffset = offset + limit < capture.Frames.Length ? (int?)offset + limit : null };
+                    return FramePageResult(capture with { Frames = capture.Frames.Skip(offset).Take(limit).ToArray(), ActionEffects = null,
+                        Activity = null, Evidence = null }, capture.Frames.Length, capture.ActionEffects?.Length, capture.Activity?.Length, offset, limit);
                 }
                 if (tool is READ_MECHANICS or READ_ACR)
                 {
                     var rows = capture.Evidence;
                     var kind = input.Has("kind") ? input.Text("kind") : null;
-                    var matches = (rows ?? []).Where(row => (row.Kind == "acr_decision") == (tool == READ_ACR) &&
-                        (kind is null || row.Kind == kind)).ToArray();
                     var offset = input.Integer("offset", 0, 0, 6000);
                     var limit = input.Integer("limit", 20, 1, 64);
-                    return new
-                    {
-                        status = rows is null ? "not_recorded" : "ok", combatID = input.Text("archive_id"),
-                        capture.MechanicSources, capture.PartialStart,
-                        truncated = tool == READ_ACR ? capture.DecisionsTruncated : capture.EvidenceTruncated,
-                        matched = matches.Length,
-                        events = matches.Skip(offset).Take(limit).ToArray(),
-                        nextOffset = offset + limit < matches.Length ? (int?)offset + limit : null,
-                    };
+                    var acr = tool == READ_ACR;
+                    var matched = 0;
+                    List<FightEvidence>? events = null;
+                    if (rows is not null)
+                        foreach (var row in rows)
+                        {
+                            if ((row.Kind == "acr_decision") != acr || kind is not null && kind != row.Kind) continue;
+                            if (matched >= offset && matched < offset + limit)
+                                (events ??= new(Math.Min(limit, rows.Length - offset))).Add(row);
+                            matched++;
+                        }
+                    return EvidencePageResult(capture, input.Text("archive_id"), acr, rows is not null, matched, events, offset, limit);
                 }
                 if (tool == "read_combat_activity") return capture is null ? new { status = "invalid_capture" } : ReadBattleActivity(capture, input);
                 if (tool == COMBAT_TIMELINE_TOOL)
@@ -407,7 +408,7 @@ internal sealed partial class GameDiagnostics(GameServices services, GameReadout
             var existing = ArchiveFiles(directory, automatic);
             var maxArchives = Math.Clamp(configuration.CombatArchiveLimit, 1, 1000);
             var maxBytes = Math.Clamp(configuration.CombatArchiveMiB, 1, 100) * 1024L * 1024;
-            if (!automatic && existing.Length >= maxArchives)
+            if (!automatic && existing.Count >= maxArchives)
                 throw new InvalidOperationException("战斗归档已满，请在插件配置目录清理后再保存。");
             Directory.CreateDirectory(directory);
             _ = ArchiveDirectory(automatic);
@@ -486,16 +487,22 @@ internal sealed partial class GameDiagnostics(GameServices services, GameReadout
         }
     }
 
-    private static FileInfo[] ArchiveFiles(string directory, bool automatic = false)
+    private static IReadOnlyList<FileInfo> ArchiveFiles(string directory, bool automatic = false)
     {
         var root = new DirectoryInfo(directory);
         if (!root.Exists) return [];
         var suffix = automatic ? ".json.gz" : ".json";
-        var candidates = root.EnumerateFiles("*" + suffix).Take(1025).ToArray();
-        if (candidates.Length > 1024) throw new InvalidOperationException("战斗归档目录文件过多。");
-        var entries = candidates.Where(file => file.Name.Length == 36 + suffix.Length && file.Name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) &&
-            Guid.TryParseExact(file.Name.AsSpan(0, 36), "D", out _) && !file.Attributes.HasFlag(FileAttributes.ReparsePoint)).ToArray();
-        return entries;
+        List<FileInfo>? entries = null;
+        var scanned = 0;
+        foreach (var file in root.EnumerateFiles("*" + suffix))
+        {
+            if (++scanned > 1024) throw new InvalidOperationException("战斗归档目录文件过多。");
+            var name = file.Name;
+            if (name.Length == 36 + suffix.Length && name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) &&
+                Guid.TryParseExact(name.AsSpan(0, 36), "D", out _) && !file.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                (entries ??= []).Add(file);
+        }
+        return entries is null ? Array.Empty<FileInfo>() : entries;
     }
 
     private static string? InventoryScope(GameInventoryType type)

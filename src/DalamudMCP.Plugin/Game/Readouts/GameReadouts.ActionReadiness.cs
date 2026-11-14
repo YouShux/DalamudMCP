@@ -116,8 +116,10 @@ internal sealed partial class GameReadouts
         var hasActionRow = true;
         if (type == ActionType.Action)
         {
+            HashSet<uint>? linkedActions = null;
             var matches = id.HasValue ? [] : sheet.Where(row => row.Name.ToString().Equals(name, StringComparison.OrdinalIgnoreCase))
-                .Where(row => row.IsPlayerAction || generalSheet.Any(link => link.Action.RowId == row.RowId)).Take(9).ToArray();
+                .Where(row => row.IsPlayerAction || (linkedActions ??= generalSheet.Select(link => link.Action.RowId).ToHashSet())
+                    .Contains(row.RowId)).Take(9).ToArray();
             if (matches.Length > 1) return new { status = "ambiguous_action", actionIDs = matches.Select(row => row.RowId).ToArray() };
             if (!(id.HasValue ? sheet.TryGetRow(id.Value, out rowData) : (rowData = matches.FirstOrDefault()).RowId != 0))
                 return new { status = "unknown_action" };

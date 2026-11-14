@@ -7,7 +7,7 @@ namespace DalamudMCP.Plugin.Tools;
 internal sealed class DalamudLog : IDisposable
 {
     private readonly object gate = new();
-    private readonly Queue<Entry> entries = new();
+    private readonly Entry?[] entries = new Entry?[CAPACITY];
     private readonly string streamID = Guid.NewGuid().ToString("N");
     private readonly object? sink;
     private readonly EventInfo? logLine;
@@ -55,21 +55,36 @@ internal sealed class DalamudLog : IDisposable
             if (expectedStream is not null && expectedStream != streamID)
                 return new { status = "stream_changed", streamId = streamID, nextAfterId = 0L, entries = Array.Empty<Entry>() };
             if (afterID > lastID) throw new ArgumentException("after_id 超过当前日志游标。");
-            var gap = afterID != 0 && entries.TryPeek(out var first) && first.Id > afterID + 1;
-            var matches = entries.Where(entry => entry.Id > afterID
-                && (source is null || entry.Source.Contains(source, StringComparison.OrdinalIgnoreCase))
-                && (contains is null || entry.Message.Contains(contains, StringComparison.OrdinalIgnoreCase)));
-            var page = (afterID == 0 ? matches.TakeLast(count) : matches.Take(count + 1)).ToArray();
-            var hasMore = page.Length > count;
-            if (hasMore) page = page[..count];
+            var firstID = Math.Max(1, lastID - CAPACITY + 1);
+            var gap = afterID != 0 && afterID < firstID - 1;
+            var recent = afterID == 0;
+            var start = recent ? lastID : Math.Max(firstID, afterID + 1);
+            var step = recent ? -1 : 1;
+            List<Entry>? page = null;
+            var hasMore = false;
+            for (var id = start; id >= firstID && id <= lastID; id += step)
+            {
+                var entry = entries[(int)(id % CAPACITY)]!;
+                if ((source is not null && !entry.Source.Contains(source, StringComparison.OrdinalIgnoreCase)) ||
+                    (contains is not null && !entry.Message.Contains(contains, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                if (page?.Count == count)
+                {
+                    hasMore = true;
+                    break;
+                }
+                (page ??= new(Math.Min(count, (int)(recent ? lastID - firstID + 1 : lastID - start + 1)))).Add(entry);
+                if (recent && page.Count == count) break;
+            }
+            if (recent) page?.Reverse();
             return new
             {
                 status = "snapshot",
                 streamId = streamID,
-                nextAfterId = hasMore ? page[^1].Id : lastID,
+                nextAfterId = hasMore ? page![^1].Id : lastID,
                 hasMore,
                 gap,
-                entries = page,
+                entries = (IReadOnlyList<Entry>?)page ?? Array.Empty<Entry>(),
             };
         }
     }
@@ -81,11 +96,11 @@ internal sealed class DalamudLog : IDisposable
         lock (gate)
         {
             if (disposed) return;
-            if (entries.Count == CAPACITY) entries.Dequeue();
-            entries.Enqueue(new(++lastID, item.Event.Timestamp, item.Event.Level.ToString(),
+            var id = ++lastID;
+            entries[(int)(id % CAPACITY)] = new(id, item.Event.Timestamp, item.Event.Level.ToString(),
                 source.Length > 256 ? source[..256] : source,
                 item.Line.Length > MAX_MESSAGE_LENGTH ? item.Line[..MAX_MESSAGE_LENGTH] : item.Line,
-                item.Line.Length > MAX_MESSAGE_LENGTH));
+                item.Line.Length > MAX_MESSAGE_LENGTH);
         }
     }
 
@@ -94,7 +109,7 @@ internal sealed class DalamudLog : IDisposable
         lock (gate)
         {
             disposed = true;
-            entries.Clear();
+            Array.Clear(entries);
         }
         logLine?.RemoveEventHandler(sink, (EventHandler<(string, LogEvent)>)OnLogLine);
     }

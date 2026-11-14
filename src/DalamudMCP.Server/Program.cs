@@ -43,6 +43,7 @@ if (LocalBearer.ReadToken() is not { } bearerToken)
 
 var tokenHash = LocalBearer.Hash(bearerToken);
 var webBuilder = WebApplication.CreateBuilder();
+webBuilder.Services.AddHttpContextAccessor();
 webBuilder.WebHost.ConfigureKestrel(server => server.Listen(IPAddress.Loopback, options.Port));
 ConfigureLogging(webBuilder.Logging);
 ConfigureMCP(webBuilder.Services, options).WithHttpTransport();
@@ -91,18 +92,23 @@ static IMcpServerBuilder ConfigureMCP(IServiceCollection services, GatewayOption
         server.ServerInfo = new() { Name = "DalamudMCP", Version = "1.0.0" };
         server.ToolCollection = catalogChanges;
         server.ServerInstructions =
-            "游戏状态与 Dalamud 原生调试工具的统一入口。原生未连接时游戏工具仍可使用。收到工具目录变更通知后重新列出工具。" +
-            "用 read_development_workflow 读取当前运行 DLL 的开发验收流程及 MVID。" +
-            "验证开发插件时，先用 get_dev_build 核对注册路径。成功编译后读取本次产物的 MVID，调用 wait_for_dev_build。" +
-            "新开发 DLL 尚未注册时，仅在用户授权且信任该 DLL 的情况下使用 load_dev_dll，传入本次产物的 MVID。" +
-            "发现插件时用 list_plugins、list_plugin_commands、list_plugin_ipc 和 get_plugin_state。IPC 签名只说明调用形状；不要将函数名视为只读授权。" +
-            "有授权时可用 show_plugin_window 调用插件公开的界面入口，再用 get_window_snapshot 或 wait_for_window_visibility 独立核对。回调返回不等于窗口已可见。" +
-            "仅在 status=ready 且 buildVerified=true 时继续。先用 get_dalamud_log 查看运行日志，再用 get_addon_list、get_addon_strings 或截图核对实际结果。" +
-            "请求受理或事件派发不代表游戏状态已改变。遵守工具权限；无明确授权时只观察。";
+            "已知工具和参数时直接调用；否则按用途只查相关工具。目录变更后由客户端刷新，不把完整目录交给模型。" +
+            "原生未连接时仍可查游戏状态。" +
+            "开发验收按 read_development_workflow 执行。" +
+            "无明确授权时只观察，IPC 名称和签名不代表只读。请求受理后独立回读状态。";
     }).WithListToolsHandler(async (context, cancellationToken) =>
         await (context.Services ?? throw new InvalidOperationException("服务容器不可用。")).GetRequiredService<ToolGateway>().ListAsync(cancellationToken))
       .WithCallToolHandler(async (context, cancellationToken) =>
-        await (context.Services ?? throw new InvalidOperationException("服务容器不可用。")).GetRequiredService<ToolGateway>().CallAsync(context.Params ?? throw new ArgumentException("工具参数缺失。"), cancellationToken));
+      {
+          var services = context.Services ?? throw new InvalidOperationException("服务容器不可用。");
+          var request = services.GetService<IHttpContextAccessor>()?.HttpContext?.Request;
+          var structuredOnly = request is not null && request.Query["result"] is { Count: 1 } mode && mode[0] == "structured";
+          var result = await services.GetRequiredService<ToolGateway>().CallAsync(
+              context.Params ?? throw new ArgumentException("工具参数缺失。"), structuredOnly, cancellationToken);
+          if (structuredOnly)
+              ToolGateway.RemoveDuplicateText(result);
+          return result;
+      });
 }
 
 static void ConfigureLogging(ILoggingBuilder logging)

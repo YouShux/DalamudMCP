@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -36,33 +37,33 @@ internal sealed partial class GameDiagnostics
             try
             {
                 token.ThrowIfCancellationRequested();
-                var capture = LoadArchive(id, token);
+                object? analysisPage = null;
+                var capture = export ? LoadArchive(id, token) : LoadArchive(id, null, null, out analysisPage, token,
+                    new ArchivePage(ArchiveSection.Analysis, offset, limit, From: filter.FromMs, To: filter.ToMs, ActionID: filter.ActionID,
+                        Actor: filter.SourceID is { } source ? System.Text.Encoding.ASCII.GetBytes(source) : null,
+                        Analysis: new(id, groupBy, timelineLimit, token)));
+                if (analysisPage is not null)
+                {
+                    token.ThrowIfCancellationRequested();
+                    return analysisPage;
+                }
                 if (capture is null) return new { status = "not_found" };
                 var matches = MatchEffects(capture, filter, out var status);
                 var groups = AggregateEffects(matches, groupBy, token);
                 token.ThrowIfCancellationRequested();
-                var coverage = capture.ActionEffectCoverage ?? "not_observed";
-                var captureTruncated = capture.Truncated || capture.ActionEffectsTruncated == true;
                 if (export && status != "invalid_capture")
+                {
+                    var coverage = capture.ActionEffectCoverage ?? "not_observed";
+                    var captureTruncated = capture.Truncated || capture.ActionEffectsTruncated == true;
                     return ExportCombat(combatArchiveRoot, combatExportSync, id, new
                     {
                         archiveID = id, capture.CapturedAt, capture.BuildMvid, status, filter, groupBy, groups,
                         timeline = matches, matchingEvents = matches.Length, groupCount = groups.Length,
                         capture.PartialStart, captureTruncated, coverage, interpretationVerified = false,
                     }, coverage, capture.PartialStart, captureTruncated, allowed, token);
+                }
 
-                var page = groups.Skip(offset).Take(limit).ToArray();
-                return new
-                {
-                    status, archiveID = id, capture.BuildMvid, capture.CapturedAt, matchingEvents = matches.Length,
-                    groupCount = groups.Length, groups = page, timeline = matches.Take(timelineLimit).Select(effect => new
-                    {
-                        effect.ObservedAtMs, effect.GlobalSequence, effect.SourceID, effect.TargetID, effect.TargetIndex,
-                        effect.ActionID, effect.ActionType, effect.BeforeCombat, effects = effect.Effects.Select(DecodeEffect).ToArray(),
-                    }).ToArray(), timelineTruncated = matches.Length > timelineLimit,
-                    nextOffset = page.Length > 0 && offset + page.Length < groups.Length ? (int?)offset + page.Length : null,
-                    capture.PartialStart, captureTruncated, coverage, interpretationVerified = false,
-                };
+                return AnalysisPageResult(capture, id, status, groups, matches.Length, matches.Take(timelineLimit), offset, limit, timelineLimit);
             }
             catch (FileNotFoundException) { return new { status = "not_found" }; }
             catch (InvalidDataException) { return new { status = "invalid_capture" }; }
@@ -89,8 +90,31 @@ internal sealed partial class GameDiagnostics
         }
     }
 
-    private CombatCapture? LoadArchive(Guid id, CancellationToken token = default)
+    private static object AnalysisPageResult(CombatCapture capture, Guid id, string status, EffectGroup[] groups, int matchCount,
+        IEnumerable<ObservedEffect> timeline, int offset, int limit, int timelineLimit)
     {
+        var coverage = capture.ActionEffectCoverage ?? "not_observed";
+        var captureTruncated = capture.Truncated || capture.ActionEffectsTruncated == true;
+        var page = groups.Skip(offset).Take(limit).ToArray();
+        return new
+        {
+            status, archiveID = id, capture.BuildMvid, capture.CapturedAt, matchingEvents = matchCount,
+            groupCount = groups.Length, groups = page, timeline = timeline.Select(effect => new
+            {
+                effect.ObservedAtMs, effect.GlobalSequence, effect.SourceID, effect.TargetID, effect.TargetIndex,
+                effect.ActionID, effect.ActionType, effect.BeforeCombat, effects = effect.Effects.Select(DecodeEffect).ToArray(),
+            }).ToArray(), timelineTruncated = matchCount > timelineLimit,
+            nextOffset = page.Length > 0 && offset + page.Length < groups.Length ? (int?)offset + page.Length : null,
+            capture.PartialStart, captureTruncated, coverage, interpretationVerified = false,
+        };
+    }
+
+    private CombatCapture? LoadArchive(Guid id, CancellationToken token = default) => LoadArchive(id, null, null, out _, token);
+
+    private CombatCapture? LoadArchive(Guid id, ToolArguments? pageArguments, string? pageTool, out object? page, CancellationToken token = default,
+        ArchivePage? request = null)
+    {
+        page = null;
         var fileName = id.ToString("D") + ".json";
         var file = new FileInfo(Path.Combine(ArchiveDirectory(), fileName));
         var compressed = !file.Exists;
@@ -101,17 +125,53 @@ internal sealed partial class GameDiagnostics
         using var stream = file.OpenRead();
         using var gzip = compressed ? new GZipStream(stream, CompressionMode.Decompress) : null;
         var source = (Stream?)gzip ?? stream;
-        using var data = new MemoryStream((int)Math.Min(file.Length, MAX_ARCHIVE_BYTES));
-        var buffer = new byte[64 * 1024];
-        while (true)
+        return ReadArchiveData(source, (int)file.Length, compressed, pageArguments, pageTool, out page, token, request);
+    }
+
+    private static CombatCapture? ReadArchiveData(Stream source, int fileLength, bool compressed,
+        ToolArguments? pageArguments, string? pageTool, out object? page, CancellationToken token, ArchivePage? request)
+    {
+        page = null;
+        var size = compressed ? Math.Clamp(fileLength, 64 * 1024, MAX_ARCHIVE_BYTES) : Math.Max(1, fileLength);
+        var buffer = ArrayPool<byte>.Shared.Rent(size);
+        var length = 0;
+        try
         {
-            token.ThrowIfCancellationRequested();
-            var read = source.Read(buffer);
-            if (read == 0) break;
-            if (data.Length + read > MAX_ARCHIVE_BYTES) throw new InvalidDataException("归档文件过大。");
-            data.Write(buffer, 0, read);
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                var capacity = Math.Min(buffer.Length, MAX_ARCHIVE_BYTES);
+                if (length == capacity)
+                {
+                    var next = source.ReadByte();
+                    if (next < 0) break;
+                    if (length == MAX_ARCHIVE_BYTES) throw new InvalidDataException("归档文件过大。");
+
+                    var larger = ArrayPool<byte>.Shared.Rent(Math.Min(capacity * 2, MAX_ARCHIVE_BYTES));
+                    buffer.AsSpan(0, length).CopyTo(larger);
+                    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+                    buffer = larger;
+                    buffer[length++] = (byte)next;
+                    continue;
+                }
+
+                var read = source.Read(buffer.AsSpan(length, Math.Min(64 * 1024, capacity - length)));
+                if (read == 0) break;
+                length += read;
+            }
+            var data = buffer.AsSpan(0, length);
+            if (length >= 128 * 1024 && data[^1] == (byte)'}' &&
+                (request ?? (pageArguments is { } input && pageTool is not null ? GetArchivePage(input, pageTool) : null)) is { } selected &&
+                TryReadArchivePage(data, selected, out var capture, out page))
+            {
+                return capture;
+            }
+            return JsonSerializer.Deserialize<CombatCapture>(data, ToolJson.Options);
         }
-        return JsonSerializer.Deserialize<CombatCapture>(data.GetBuffer().AsSpan(0, (int)data.Length), ToolJson.Options);
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
     }
 
     private static object ExportCombat(string archiveRoot, object sync, Guid archiveID, object value, string coverage, bool partialStart, bool captureTruncated,

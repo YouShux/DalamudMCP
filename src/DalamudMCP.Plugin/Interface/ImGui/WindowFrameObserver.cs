@@ -88,12 +88,18 @@ internal sealed class WindowFrameObserver : IDisposable
     {
         if (frame is null) return new("context_unavailable");
         if (!selector.IsExact)
-            return new("ok", frame.Number, frame.Windows.Take(LIST_LIMIT).ToArray(), frame.ListTruncated || frame.ScanIncomplete);
+            return new("ok", frame.Number, frame.Windows.Length <= LIST_LIMIT ? frame.Windows : frame.Windows[..LIST_LIMIT],
+                frame.ListTruncated || frame.ScanIncomplete);
 
-        var matches = frame.Windows.Where(selector.Matches).Take(2).ToArray();
-        if (matches.Length > 1) return new("ambiguous", frame.Number, Truncated: frame.ScanIncomplete);
+        Window? match = null;
+        foreach (var window in frame.Windows)
+        {
+            if (!selector.Matches(window)) continue;
+            if (match is not null) return new("ambiguous", frame.Number, Truncated: frame.ScanIncomplete);
+            match = window;
+        }
         if (frame.ScanIncomplete) return new("scan_incomplete", frame.Number, Truncated: true);
-        return new(matches.Length == 0 ? "not_found" : "ok", frame.Number, matches);
+        return match is null ? new("not_found", frame.Number, []) : new("ok", frame.Number, [match]);
     }
 
     private static bool Matches(Window window, Condition condition) => condition switch

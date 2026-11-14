@@ -6,7 +6,7 @@ internal sealed class ClientStateJournal(int capacity = 256)
     internal static readonly string[] Kinds = ["login", "territory", "combat", "job", "target", "hp", "mp", "gp", "position", "focus", "target_hp", "level", "duty", "fates", "cast", "statuses", "dead"];
     private readonly Guid streamID = Guid.NewGuid();
     private readonly object gate = new();
-    private readonly Queue<Change> changes = new(capacity);
+    private readonly Change?[] changes = new Change?[capacity];
     private TaskCompletionSource updated = NewSignal();
     private long sequence;
     private int waiting;
@@ -55,8 +55,9 @@ internal sealed class ClientStateJournal(int capacity = 256)
             void Append<T>(string kind, T oldValue, T newValue)
             {
                 if (EqualityComparer<T>.Default.Equals(oldValue, newValue)) return;
-                if (changes.Count == capacity) changes.Dequeue();
-                changes.Enqueue(new(++sequence, now, kind, oldValue, newValue));
+                var next = sequence + 1;
+                changes[(int)(sequence % changes.Length)] = new(next, now, kind, oldValue, newValue);
+                sequence = next;
             }
         }
     }
@@ -87,15 +88,12 @@ internal sealed class ClientStateJournal(int capacity = 256)
                 lock (gate)
                 {
                     token.ThrowIfCancellationRequested();
-                    var earliest = changes.TryPeek(out var first) ? first.Sequence : sequence + 1;
+                    var earliest = Math.Max(1, sequence - changes.Length + 1);
                     if (requestedStream.HasValue && requestedStream != streamID)
                         return Result("stream_changed", sequence, earliest, []);
                     if (after > sequence) throw new ArgumentOutOfRangeException("after_sequence");
                     var missed = hasCursor && after < earliest - 1;
-                    var matches = changes.Where(change => change.Sequence > after && (kinds is null || kinds.Contains(change.Kind)))
-                        .Take(limit + 1).ToArray();
-                    var more = matches.Length > limit;
-                    var page = more ? matches[..limit] : matches;
+                    var page = ReadPage(Math.Max(after + 1, earliest), limit, kinds, out var more);
                     var last = more ? page[^1].Sequence : sequence;
                     if (page.Length > 0 || missed || wait == 0 || timedOut)
                         return Result(missed ? "history_truncated" : timedOut && page.Length == 0 ? "timeout" : "ok", last, earliest, page, more);
@@ -124,6 +122,45 @@ internal sealed class ClientStateJournal(int capacity = 256)
         {
             status, streamID, afterSequence = next, earliestSequence = earliest, hasMore, items,
         };
+    }
+
+    private Change[] ReadPage(long start, int limit, HashSet<string>? kinds, out bool more)
+    {
+        more = false;
+        if (start > sequence) return [];
+        var remaining = (int)(sequence - start + 1);
+        var index = (int)((start - 1) % changes.Length);
+        if (kinds is null)
+        {
+            var length = Math.Min(remaining, limit);
+            var page = new Change[length];
+            var first = Math.Min(length, changes.Length - index);
+            Array.Copy(changes, index, page, 0, first);
+            if (first < length) Array.Copy(changes, 0, page, first, length - first);
+            more = remaining > limit;
+            return page;
+        }
+
+        Span<int> selected = stackalloc int[limit];
+        var count = 0;
+        for (; remaining > 0; remaining--)
+        {
+            if (kinds.Contains(changes[index]!.Kind))
+            {
+                if (count == limit)
+                {
+                    more = true;
+                    break;
+                }
+                selected[count++] = index;
+            }
+            if (++index == changes.Length) index = 0;
+        }
+
+        if (count == 0) return [];
+        var filtered = new Change[count];
+        for (var i = 0; i < count; i++) filtered[i] = changes[selected[i]]!;
+        return filtered;
     }
 
     private static HashSet<string> ReadKinds(ToolArguments input)

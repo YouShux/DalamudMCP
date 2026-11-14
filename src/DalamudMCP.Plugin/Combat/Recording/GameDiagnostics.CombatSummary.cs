@@ -69,8 +69,80 @@ internal sealed partial class GameDiagnostics
                 rows[0].ObservedAtMs, rows[^1].ObservedAtMs, times?.Length, canIdentify ? null : "batch_identity_incomplete",
                 intervals is { Length: > 0 } ? new(intervals.Length, intervals.Min(), intervals.Max(), intervals.Average()) : null));
         }
-        return groups.OrderByDescending(group => group.EffectRows).ThenBy(group => group.SourceID, StringComparer.Ordinal)
+        return OrderEffectGroups(groups);
+    }
+
+    private static EffectGroup[] OrderEffectGroups(IEnumerable<EffectGroup> groups) =>
+        groups.OrderByDescending(group => group.EffectRows).ThenBy(group => group.SourceID, StringComparer.Ordinal)
             .ThenBy(group => group.ActionID).ThenBy(group => group.ActionType).ToArray();
+
+    private sealed class EffectAccumulator(string groupBy)
+    {
+        private readonly Dictionary<(ulong Source, uint? Action, byte? Type), EffectGroupState> groups = [];
+        internal int Matched { get; private set; }
+
+        internal void Add(ulong source, ulong target, uint sequence, uint action, byte type, int time)
+        {
+            var key = (groupBy == "action" ? 0UL : source, groupBy == "source" ? (uint?)null : action,
+                groupBy == "source" ? (byte?)null : type);
+            if (!groups.TryGetValue(key, out var group))
+                groups.Add(key, group = new EffectGroupState());
+            group.Rows++;
+            Matched++;
+            group.First = Math.Min(group.First, time);
+            group.Last = Math.Max(group.Last, time);
+            if (target != 0) (group.Targets ??= []).Add(target);
+            if (sequence == 0 || action == 0 || source == 0)
+            {
+                group.Incomplete = true;
+                group.Batches = null;
+            }
+            else if (!group.Incomplete)
+            {
+                var batches = group.Batches ??= [];
+                ref var earliest = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(batches,
+                    (sequence, source, action, type), out var exists);
+                if (!exists || time < earliest) earliest = time;
+            }
+        }
+
+        internal EffectGroup[] Finish(CancellationToken token)
+        {
+            var result = new List<EffectGroup>(groups.Count);
+            foreach (var (key, group) in groups)
+            {
+                token.ThrowIfCancellationRequested();
+                var count = group.Batches?.Count;
+                EffectIntervals? intervals = null;
+                if (group.Batches is { Count: > 1 } batches)
+                {
+                    var times = batches.Values.ToArray();
+                    Array.Sort(times);
+                    var min = int.MaxValue;
+                    var max = 0;
+                    for (var i = 1; i < times.Length; i++)
+                    {
+                        var gap = times[i] - times[i - 1];
+                        min = Math.Min(min, gap);
+                        max = Math.Max(max, gap);
+                    }
+                    intervals = new(times.Length - 1, min, max, (double)(times[^1] - times[0]) / (times.Length - 1));
+                }
+                result.Add(new(key.Source == 0 ? null : $"0x{key.Source:X}", key.Action, key.Type, group.Rows, group.Targets?.Count ?? 0,
+                    group.First, group.Last, count, group.Incomplete ? "batch_identity_incomplete" : null, intervals));
+            }
+            return OrderEffectGroups(result);
+        }
+    }
+
+    private sealed class EffectGroupState
+    {
+        internal int Rows;
+        internal int First = int.MaxValue;
+        internal int Last = int.MinValue;
+        internal HashSet<ulong>? Targets;
+        internal bool Incomplete;
+        internal Dictionary<(uint Sequence, ulong Source, uint Action, byte Type), int>? Batches;
     }
 
     private static string? ActorID(string? id)

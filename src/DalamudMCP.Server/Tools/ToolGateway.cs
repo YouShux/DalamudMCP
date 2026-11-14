@@ -56,28 +56,22 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
         return new() { Tools = tools };
     }
 
-    public async Task<CallToolResult> CallAsync(CallToolRequestParams request, CancellationToken cancellationToken)
+    public async Task<CallToolResult> CallAsync(CallToolRequestParams request, bool structuredOnly, CancellationToken cancellationToken)
     {
         try
         {
-            var catalog = await game.SendAsync<ToolCatalog>(new("tools/list"), cancellationToken);
-            var settings = catalog.Settings;
+            var route = await game.SendAsync<GameToolRoute>(new("tools/route", request.Name,
+                ToolJson.Element(request.Arguments ?? new Dictionary<string, JsonElement>()), structuredOnly), cancellationToken);
+            if (route.Result is { } result)
+                return result.Deserialize<CallToolResult>(ToolJson.Options) ?? throw new InvalidOperationException("游戏未返回工具结果。");
+            var settings = route.NativeSettings ?? throw new InvalidOperationException("游戏未返回原生工具权限。");
             if (settings.DisabledTools.Contains(request.Name, StringComparer.Ordinal))
                 return Error("此工具已禁用。");
-
-            var gameTool = catalog.Tools.FirstOrDefault(tool => tool.Name == request.Name);
-            if (gameTool is not null)
-            {
-                if (!NativeAccess.IsAllowed(gameTool.Access, settings))
-                    return Error("此操作所需权限尚未开启，请在 DalamudMCP 设置中确认。");
-                return await game.SendAsync<CallToolResult>(new("tools/call", gameTool.Name,
-                    ToolJson.Element(request.Arguments ?? new Dictionary<string, JsonElement>())), cancellationToken);
-            }
 
             await native.ConnectAsync(settings.NativePort, false, cancellationToken);
             if (native.Current is not { } active)
                 return Error("卫月原生 MCP 未连接。");
-            var tool = NativeTools(catalog, active).FirstOrDefault(item => item.Name == request.Name);
+            var tool = active.Tools.FirstOrDefault(item => item.Name == request.Name);
             if (tool is null) return Error($"工具不存在：{request.Name}。");
 
             if (request.Arguments?.Keys.Any(key => key != "action" && key.Equals("action", StringComparison.OrdinalIgnoreCase)) == true)
@@ -111,6 +105,22 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
             tool.Name, tool.Title ?? tool.Name, tool.Description ?? string.Empty,
             tool.InputSchema, NativeAccess.GetAccess(tool, active.Reviewed), "native"))).ToArray();
         return new(true, null, tools);
+    }
+
+    internal static void RemoveDuplicateText(CallToolResult result)
+    {
+        if (result.IsError == true || result.StructuredContent is not { ValueKind: JsonValueKind.Object } structured ||
+            !structured.TryGetProperty("data", out var data) ||
+            result.Content is not [TextContentBlock { Annotations: null, Meta: null } text])
+            return;
+
+        try
+        {
+            using var parsed = JsonDocument.Parse(text.Text);
+            if (JsonElement.DeepEquals(data, parsed.RootElement))
+                result.Content = [];
+        }
+        catch (JsonException) { }
     }
 
     private static IEnumerable<Tool> NativeTools(ToolCatalog catalog, NativeBridge.Connection active)

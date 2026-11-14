@@ -3,7 +3,7 @@
     "Author": "YouShu",
     "Name": "DalamudMCP",
     "InternalName": "DalamudMCP",
-    "AssemblyVersion": "1.1.0.0",
+    "AssemblyVersion": "1.1.1.0",
     "RepoUrl": "https://github.com/YouShux/DalamudMCP",
     "IconUrl": "https://raw.githubusercontent.com/YouShux/DalamudMCP/main/images/icon.png",
     "Punchline": "把许愿式编程带进《最终幻想 XIV》",
@@ -17,8 +17,8 @@
     "Tags": ["mcp", "开发工具"],
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/YouShux/DalamudMCP/releases/download/v1.1.0.0/DalamudMCP.zip",
-    "DownloadLinkUpdate": "https://github.com/YouShux/DalamudMCP/releases/download/v1.1.0.0/DalamudMCP.zip",
+    "DownloadLinkInstall": "https://github.com/YouShux/DalamudMCP/releases/download/v1.1.1.0/DalamudMCP.zip",
+    "DownloadLinkUpdate": "https://github.com/YouShux/DalamudMCP/releases/download/v1.1.1.0/DalamudMCP.zip",
     "Changelog": ""
   }
 ]

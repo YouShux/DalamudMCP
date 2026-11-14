@@ -33,6 +33,7 @@ internal sealed partial class GameState
             return new { status = "unavailable", reason = "recast_manager" };
         var seen = new HashSet<(ActionType, uint)>();
         var results = new List<object>();
+        var active = 0;
         for (uint bar = 0; bar < 10; bar++)
             for (uint slot = 0; slot < 12; slot++)
             {
@@ -46,14 +47,14 @@ internal sealed partial class GameState
                 };
                 var id = entry->CommandId;
                 if (type == ActionType.None || !seen.Add((type, id)) || !manager->IsRecastTimerActive(type, id)) continue;
+                if (++active > limit) continue;
                 var duration = manager->GetRecastTime(type, id);
                 var elapsed = manager->GetRecastTimeElapsed(type, id);
                 results.Add(new { bar = bar + 1, slot = slot + 1, actionID = id, actionKind = type.ToString(),
                     durationSeconds = float.IsFinite(duration) && duration >= 0 ? (float?)duration : null,
                     elapsedSeconds = float.IsFinite(elapsed) && elapsed >= 0 ? (float?)elapsed : null });
             }
-        return new { status = "ok", jobID = player.ClassJob.RowId, active = results.Count, truncated = results.Count > limit,
-            rows = results.Take(limit).ToArray() };
+        return new { status = "ok", jobID = player.ClassJob.RowId, active, truncated = active > limit, rows = results };
     }
 
     public unsafe object Hotbar(ToolArguments input, bool execute, Func<bool> isAllowed)

@@ -66,31 +66,37 @@ public sealed partial class GameTools : IDisposable
         services.Framework.Update += ObserveDiagnostics;
     }
 
-    internal async ValueTask<JsonElement> CallAsync(string name, JsonElement arguments, Func<bool> isAllowed, CancellationToken cancellationToken)
+    internal async ValueTask<JsonElement> CallAsync(ToolDefinition definition, JsonElement arguments, bool structuredOnly, Func<bool> isAllowed, CancellationToken cancellationToken)
     {
+        var name = definition.Name;
         var tracked = name is "inspect_runtime_catalog" or "access_runtime_object" or "invoke_sdk_member" or "access_sdk_memory"
             or "read_process_memory" or "write_process_memory" or "scan_process_memory" or "search_memory_values"
             or "inspect_address_regions" or "follow_memory_offsets" or "inspect_process_module"
             or "start_runtime_observation" or "stop_runtime_observation" or "watch_runtime_value";
         var started = Environment.TickCount64;
         var status = "returned";
-        try { return await CallCoreAsync(name, arguments, isAllowed, cancellationToken).ConfigureAwait(false); }
+        try { return await CallCoreAsync(definition, arguments, structuredOnly, isAllowed, cancellationToken).ConfigureAwait(false); }
         catch (Exception error) { status = "error:" + error.GetType().Name; throw; }
         finally { if (tracked) runtimeCalls.Record(name, started, status); }
     }
 
-    private async ValueTask<JsonElement> CallCoreAsync(string name, JsonElement arguments, Func<bool> isAllowed, CancellationToken cancellationToken)
+    private async ValueTask<JsonElement> CallCoreAsync(ToolDefinition definition, JsonElement arguments, bool structuredOnly, Func<bool> isAllowed, CancellationToken cancellationToken)
     {
+        JsonElement Success<T>(T value) => ToolJson.Success(value, structuredOnly);
+
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
         linked.Token.ThrowIfCancellationRequested();
-        var definition = Tools.FirstOrDefault(tool => tool.Name == name) ?? throw new ArgumentException($"未知工具 {name}。");
+        var name = definition.Name;
         if (arguments.ValueKind != JsonValueKind.Object)
             throw new ArgumentException("工具参数必须为对象。");
-        var properties = definition.InputSchema.GetProperty("properties");
-        var validNames = properties.EnumerateObject().Select(property => ToolArguments.Normalize(property.Name)).ToHashSet();
-        foreach (var argument in arguments.EnumerateObject())
-            if (!validNames.Remove(ToolArguments.Normalize(argument.Name)))
-                throw new ArgumentException($"参数未知或重复：{argument.Name}。");
+        if (arguments.EnumerateObject().MoveNext())
+        {
+            var properties = definition.InputSchema.GetProperty("properties");
+            var validNames = properties.EnumerateObject().Select(property => ToolArguments.Normalize(property.Name)).ToHashSet();
+            foreach (var argument in arguments.EnumerateObject())
+                if (!validNames.Remove(ToolArguments.Normalize(argument.Name)))
+                    throw new ArgumentException($"参数未知或重复：{argument.Name}。");
+        }
 
         var input = new ToolArguments(arguments);
         foreach (var required in definition.InputSchema.GetProperty("required").EnumerateArray())
@@ -98,65 +104,65 @@ public sealed partial class GameTools : IDisposable
                 throw new ArgumentException($"缺少参数 {required.GetString()}。");
 
         if (name is GameReadouts.CURRENCY_TOOL or AddonTools.DUTY_BROWSER_TOOL or AddonTools.DUTY_ENTRIES_TOOL or AddonTools.DUTY_SELECT_TOOL)
-            return ToolJson.Success(await ReadDutyOrCurrencyAsync(name, input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await ReadDutyOrCurrencyAsync(name, input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == ARRIVAL_TOOL)
-            return ToolJson.Success(await WaitGameArrivalAsync(input, linked.Token).ConfigureAwait(false));
+            return Success(await WaitGameArrivalAsync(input, linked.Token).ConfigureAwait(false));
         if (name == CHARACTER_REQUEST_TOOL)
-            return ToolJson.Success(await RequestCharacterControlAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await RequestCharacterControlAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == BUTTON_WORKFLOW_TOOL)
-            return ToolJson.Success(await RequestAddonButtonAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await RequestAddonButtonAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == GameReadouts.APPLY_GEARSET_TOOL)
-            return ToolJson.Success(await ApplyGearsetAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await ApplyGearsetAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == NPC_INTERACTION_TOOL)
-            return ToolJson.Success(await RequestNPCInteractionAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await RequestNPCInteractionAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == BATTLE_CHECKPOINT_TOOL)
-            return ToolJson.Success(await services.Framework.RunOnTick(() => CreateBattleCheckpoint(input), cancellationToken: linked.Token).WaitAsync(linked.Token).ConfigureAwait(false));
+            return Success(await services.Framework.RunOnTick(() => CreateBattleCheckpoint(input), cancellationToken: linked.Token).WaitAsync(linked.Token).ConfigureAwait(false));
         if (name == BATTLE_RESULT_TOOL)
-            return ToolJson.Success(await WaitBattleResultAsync(input, linked.Token).ConfigureAwait(false));
+            return Success(await WaitBattleResultAsync(input, linked.Token).ConfigureAwait(false));
         if (name == GameDiagnostics.WAIT_COMBAT_TOOL)
-            return ToolJson.Success(await diagnostics.WaitCombatRecordingAsync(input, linked.Token).ConfigureAwait(false));
+            return Success(await diagnostics.WaitCombatRecordingAsync(input, linked.Token).ConfigureAwait(false));
         if (name == PluginIntegration.MESSAGES_TOOL)
-            return ToolJson.Success(integration.ReadMessages(input));
+            return Success(integration.ReadMessages(input));
         if (name == DevelopmentWorkflow.TOOL)
-            return ToolJson.Success(DevelopmentWorkflow.Describe(input.Boolean("include_skill"), input.Boolean("include_bundle"),
+            return Success(DevelopmentWorkflow.Describe(input.Boolean("include_skill"), input.Boolean("include_bundle"),
                 input.Has("known_revision") ? input.Text("known_revision") : null));
         if (name is GameReadouts.NAMED_FIELDS_TOOL or GameReadouts.NAMED_ROW_TOOL or GameReadouts.SEARCH_FIELDS_TOOL)
         {
             if (Interlocked.Increment(ref namedQueries) > 2)
             {
                 Interlocked.Decrement(ref namedQueries);
-                return ToolJson.Success(new { status = "busy" });
+                return Success(new { status = "busy" });
             }
-            try { return ToolJson.Success(await Task.Run(() => readouts.NamedData(name, input, linked.Token), linked.Token).ConfigureAwait(false)); }
+            try { return Success(await Task.Run(() => readouts.NamedData(name, input, linked.Token), linked.Token).ConfigureAwait(false)); }
             finally { Interlocked.Decrement(ref namedQueries); }
         }
         if (name == GameDiagnostics.DECODE_TOOL)
-            return ToolJson.Success(GameDiagnostics.DecodeSample(input));
+            return Success(GameDiagnostics.DecodeSample(input));
         if (name == GameDiagnostics.COMPARE_SAMPLE_TOOL)
-            return ToolJson.Success(GameDiagnostics.CompareSamples(input));
-        if (name == "inspect_opcode_catalog") return ToolJson.Success(await opcodeCatalog.InspectAsync(input, linked.Token).ConfigureAwait(false));
-        if (name == "refresh_opcode_catalog") return ToolJson.Success(await opcodeCatalog.CheckAsync(input, linked.Token, persist: isAllowed).ConfigureAwait(false));
+            return Success(GameDiagnostics.CompareSamples(input));
+        if (name == "inspect_opcode_catalog") return Success(await opcodeCatalog.InspectAsync(input, linked.Token).ConfigureAwait(false));
+        if (name == "refresh_opcode_catalog") return Success(await opcodeCatalog.CheckAsync(input, linked.Token, persist: isAllowed).ConfigureAwait(false));
         if (name is "check_cn_opcode_catalog" or "find_cn_zone_opcode")
-            return ToolJson.Success(await opcodeCatalog.CheckAsync(input, linked.Token, name == "find_cn_zone_opcode").ConfigureAwait(false));
+            return Success(await opcodeCatalog.CheckAsync(input, linked.Token, name == "find_cn_zone_opcode").ConfigureAwait(false));
 
-        if (name == "inspect_protocol_updates") return ToolJson.Success(packetSources.Inspect());
-        if (name == "check_packet_sources") return ToolJson.Success(await packetSources.CheckAsync(input.Boolean("force"), linked.Token).ConfigureAwait(false));
-        if (name == "inspect_packet_aliases") return ToolJson.Success(BundledPacketLayouts.ReadAliases(input));
-        if (name == "inspect_runtime_catalog") return ToolJson.Success(await Task.Run(() => RuntimeInspector.Inspect(input), linked.Token).ConfigureAwait(false));
+        if (name == "inspect_protocol_updates") return Success(packetSources.Inspect());
+        if (name == "check_packet_sources") return Success(await packetSources.CheckAsync(input.Boolean("force"), linked.Token).ConfigureAwait(false));
+        if (name == "inspect_packet_aliases") return Success(BundledPacketLayouts.ReadAliases(input));
+        if (name == "inspect_runtime_catalog") return Success(await Task.Run(() => RuntimeInspector.Inspect(input), linked.Token).ConfigureAwait(false));
         if (name is "inspect_packet_layouts" or "save_packet_layout")
-            return ToolJson.Success(await Task.Run(() => name == "inspect_packet_layouts" ? packetLayouts.Read(input) : packetLayouts.Save(input, isAllowed), linked.Token).ConfigureAwait(false));
+            return Success(await Task.Run(() => name == "inspect_packet_layouts" ? packetLayouts.Read(input) : packetLayouts.Save(input, isAllowed), linked.Token).ConfigureAwait(false));
         if (name == "parse_zone_packet")
         {
             if (!isAllowed()) throw new InvalidOperationException("原始包读取权限已关闭。");
-            return ToolJson.Success(await Task.Run(() => diagnostics.InspectPacket(name, input, packetLayouts), linked.Token).ConfigureAwait(false));
+            return Success(await Task.Run(() => diagnostics.InspectPacket(name, input, packetLayouts), linked.Token).ConfigureAwait(false));
         }
-        if (name == "search_memory_values") return ToolJson.Success(await Task.Run(() => memorySearch.Call(input, isAllowed, linked.Token), linked.Token).ConfigureAwait(false));
+        if (name == "search_memory_values") return Success(await Task.Run(() => memorySearch.Call(input, isAllowed, linked.Token), linked.Token).ConfigureAwait(false));
         if (name is "inspect_address_regions" or "follow_memory_offsets" or "inspect_process_module" or "scan_process_memory")
         {
             if (Interlocked.Increment(ref memoryMapQueries) > 2)
             {
                 Interlocked.Decrement(ref memoryMapQueries);
-                return ToolJson.Success(new { status = "busy" });
+                return Success(new { status = "busy" });
             }
             var until = Environment.TickCount64 + 1000;
             var memoryToken = linked.Token;
@@ -165,40 +171,40 @@ public sealed partial class GameTools : IDisposable
                 try { return RuntimeInspector.MemoryMap(name, input, isAllowed, memoryToken, until); }
                 finally { Interlocked.Decrement(ref memoryMapQueries); }
             });
-            try { return ToolJson.Success(await operation.WaitAsync(TimeSpan.FromSeconds(1), memoryToken).ConfigureAwait(false)); }
+            try { return Success(await operation.WaitAsync(TimeSpan.FromSeconds(1), memoryToken).ConfigureAwait(false)); }
             catch (TimeoutException) when (name == "inspect_process_module")
             {
                 _ = operation.ContinueWith(static task => _ = task.Exception, CancellationToken.None,
                     TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                return ToolJson.Success(new { status = "timeout" });
+                return Success(new { status = "timeout" });
             }
-            catch (TimeoutException) { return ToolJson.Success(await operation.ConfigureAwait(false)); }
-            catch (OperationCanceledException) { return ToolJson.Success(new { status = "cancelled" }); }
+            catch (TimeoutException) { return Success(await operation.ConfigureAwait(false)); }
+            catch (OperationCanceledException) { return Success(new { status = "cancelled" }); }
         }
         if (name == "capture_game_screenshot")
-            return await GameScreenshot.CaptureAsync(services, ReadScreenshotViewport(), ReadScreenshotViewport, input, linked.Token).ConfigureAwait(false);
+            return await GameScreenshot.CaptureAsync(services, ReadScreenshotViewport(), ReadScreenshotViewport, input, structuredOnly, linked.Token).ConfigureAwait(false);
         if (name == AddonTools.SAMPLE_NODES_TOOL)
-            return ToolJson.Success(await SampleAddonNodeAsync(input, linked.Token).ConfigureAwait(false));
+            return Success(await SampleAddonNodeAsync(input, linked.Token).ConfigureAwait(false));
         if (name == "observe_addon_events")
-            return ToolJson.Success(await addonEvents.ObserveAsync(input, linked.Token).ConfigureAwait(false));
+            return Success(await addonEvents.ObserveAsync(input, linked.Token).ConfigureAwait(false));
         if (name is "observe_addon_callbacks" or "observe_addon_node_listener" or "observe_ui_callbacks")
-            return ToolJson.Success(await ObserveAddonCallbacksAsync(input, isAllowed, linked.Token, name == "observe_addon_node_listener", name == "observe_ui_callbacks").ConfigureAwait(false));
+            return Success(await ObserveAddonCallbacksAsync(input, isAllowed, linked.Token, name == "observe_addon_node_listener", name == "observe_ui_callbacks").ConfigureAwait(false));
         if (name == GameWindowState.READ_TOOL)
-            return ToolJson.Success(GameWindowState.Read());
+            return Success(GameWindowState.Read());
         if (name == GameWindowState.SET_TOOL)
-            return ToolJson.Success(await gameWindow.SetAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await gameWindow.SetAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == WindowInputScheduler.QUEUE_SEQUENCE_TOOL)
-            return ToolJson.Success(QueueSequence(input, isAllowed));
+            return Success(QueueSequence(input, isAllowed));
         if (name is WindowInputScheduler.READ_SEQUENCE_TOOL or WindowInputScheduler.CANCEL_SEQUENCE_TOOL)
-            return ToolJson.Success(windowInput.SequenceState(RepositoryPackages.ParseID(input.Text("sequence_id")),
+            return Success(windowInput.SequenceState(RepositoryPackages.ParseID(input.Text("sequence_id")),
                 name == WindowInputScheduler.CANCEL_SEQUENCE_TOOL, isAllowed));
         if (name == GameWindowState.KEY_TOOL)
         {
             var territory = input.Element("expected_territory_id").GetUInt32();
-            if (!windowInput.BeginLegacyGameKey()) return ToolJson.Success(new { status = "busy", pulses = 0 });
+            if (!windowInput.BeginLegacyGameKey()) return Success(new { status = "busy", pulses = 0 });
             try
             {
-                return ToolJson.Success(await gameWindow.RequestKeyAsync(input, isAllowed, () =>
+                return Success(await gameWindow.RequestKeyAsync(input, isAllowed, () =>
                     services.Framework.RunOnTick(() => !services.Framework.IsFrameworkUnloading && services.ClientState.IsLoggedIn &&
                         !services.ClientState.IsPvP && services.ClientState.TerritoryType == territory &&
                         !services.Condition.Any(ConditionFlag.BetweenAreas, ConditionFlag.BetweenAreas51),
@@ -207,31 +213,31 @@ public sealed partial class GameTools : IDisposable
             finally { windowInput.EndLegacyGameKey(); }
         }
         if (name == "get_dalamud_log")
-            return ToolJson.Success(log.Read(input));
+            return Success(log.Read(input));
         if (name is "install_repository_plugin" or "remove_repository_plugin")
-            return ToolJson.Success(packages.Start(name == "install_repository_plugin", input, isAllowed));
+            return Success(packages.Start(name == "install_repository_plugin", input, isAllowed));
         if (name == "change_repository_source")
-            return ToolJson.Success(packages.StartRepository(input, isAllowed));
+            return Success(packages.StartRepository(input, isAllowed));
         if (name == "get_repository_job")
-            return ToolJson.Success(packages.GetOperation(input));
+            return Success(packages.GetOperation(input));
         if (name is "queue_imgui_text" or "queue_imgui_gesture" or "probe_imgui_point" or "queue_window_chord" or "drag_window_control" or "hold_window_key")
-            return ToolJson.Success(await QueueImGuiInputAsync(input, name, isAllowed, linked.Token).ConfigureAwait(false));
-        if (name == "watch_runtime_value") return ToolJson.Success(await WatchRuntimeAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
-        if (name == "dispatch_when_node_ready") return ToolJson.Success(await DispatchWhenReadyAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await QueueImGuiInputAsync(input, name, isAllowed, linked.Token).ConfigureAwait(false));
+        if (name == "watch_runtime_value") return Success(await WatchRuntimeAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+        if (name == "dispatch_when_node_ready") return Success(await DispatchWhenReadyAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == MechanicGrid.TOOL)
-            return ToolJson.Success(MechanicGrid.Solve(input));
+            return Success(MechanicGrid.Solve(input));
         if (name is GameDiagnostics.MECHANIC_REPLAY or MechanicAssignments.TOOL or MechanicRoute.ROUTE or MechanicRoute.KNOCKBACK)
         {
             if (Interlocked.Increment(ref mechanicSolves) > 2)
             {
                 Interlocked.Decrement(ref mechanicSolves);
-                return ToolJson.Success(new { status = "busy" });
+                return Success(new { status = "busy" });
             }
             try
             {
                 using var budget = CancellationTokenSource.CreateLinkedTokenSource(linked.Token);
                 budget.CancelAfter(TimeSpan.FromSeconds(4));
-                return ToolJson.Success(await Task.Run(() => name switch
+                return Success(await Task.Run(() => name switch
                 {
                     GameDiagnostics.MECHANIC_REPLAY => diagnostics.ReplayMechanics(input, budget.Token),
                     MechanicAssignments.TOOL => MechanicAssignments.Solve(input, budget.Token),
@@ -241,53 +247,53 @@ public sealed partial class GameTools : IDisposable
             }
             catch (OperationCanceledException) when (!linked.IsCancellationRequested)
             {
-                return ToolJson.Success(new { status = "timeout" });
+                return Success(new { status = "timeout" });
             }
             finally { Interlocked.Decrement(ref mechanicSolves); }
         }
         if (name == MECHANICS_TOOL)
         {
             if (input.Has("archive_id"))
-                return ToolJson.Success(await Task.Run(() => InspectArchivedMechanics(input), linked.Token).ConfigureAwait(false));
-            return ToolJson.Success(await services.Framework.RunOnFrameworkThread(() => InspectLocalMechanics(input)).WaitAsync(linked.Token).ConfigureAwait(false));
+                return Success(await Task.Run(() => InspectArchivedMechanics(input), linked.Token).ConfigureAwait(false));
+            return Success(await services.Framework.RunOnFrameworkThread(() => InspectLocalMechanics(input)).WaitAsync(linked.Token).ConfigureAwait(false));
         }
-        if (name == "get_window_input_queue") return ToolJson.Success(windowInput.State());
-        if (name == "cancel_window_input") return ToolJson.Success(windowInput.Cancel());
+        if (name == "get_window_input_queue") return Success(windowInput.State());
+        if (name == "cancel_window_input") return Success(windowInput.Cancel());
         if (name == "sample_imgui_hit_points")
-            return ToolJson.Success(await ProbeImGuiPointsAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await ProbeImGuiPointsAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == "adjust_dropdown_panel")
-            return ToolJson.Success(await AdjustDropdownAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await AdjustDropdownAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name is "sample_combat_window" or "archive_combat_window")
-            return ToolJson.Success(await diagnostics.SampleAsync(name == "archive_combat_window", input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await diagnostics.SampleAsync(name == "archive_combat_window", input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name is GameDiagnostics.ANALYZE_COMBAT_TOOL or GameDiagnostics.EXPORT_COMBAT_TOOL)
-            return ToolJson.Success(await diagnostics.AnalyzeArchiveAsync(input, name == GameDiagnostics.EXPORT_COMBAT_TOOL, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await diagnostics.AnalyzeArchiveAsync(input, name == GameDiagnostics.EXPORT_COMBAT_TOOL, isAllowed, linked.Token).ConfigureAwait(false));
         if (name is "read_combat_capture" or "summarize_combat_capture" or "read_combat_activity" or GameDiagnostics.COMBAT_TIMELINE_TOOL
             or GameDiagnostics.READ_ACR or GameDiagnostics.READ_MECHANICS)
-            return ToolJson.Success(await Task.Run(() => diagnostics.ReadArchive(input, name), linked.Token).ConfigureAwait(false));
+            return Success(await Task.Run(() => diagnostics.ReadArchive(input, name), linked.Token).ConfigureAwait(false));
         if (name == "sample_client_connection")
-            return ToolJson.Success(await diagnostics.SampleConnectionAsync(input, linked.Token).ConfigureAwait(false));
+            return Success(await diagnostics.SampleConnectionAsync(input, linked.Token).ConfigureAwait(false));
         if (name == "watch_addon_state")
-            return ToolJson.Success(await WaitForNativeControlAsync(input, linked.Token).ConfigureAwait(false));
+            return Success(await WaitForNativeControlAsync(input, linked.Token).ConfigureAwait(false));
         if (name == AddonTools.SURFACE_TOOL)
-            return ToolJson.Success(await RequestNativeSurfaceAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await RequestNativeSurfaceAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == ClientStateJournal.TOOL)
-            return ToolJson.Success(await stateJournal.ReadAsync(input, linked.Token).ConfigureAwait(false));
+            return Success(await stateJournal.ReadAsync(input, linked.Token).ConfigureAwait(false));
         if (name == "reload_plugin")
-            return ToolJson.Success(await integration.ReloadAsync(input.Text("plugin_name"), linked.Token));
+            return Success(await integration.ReloadAsync(input.Text("plugin_name"), linked.Token));
         if (name is DevPluginBuildTools.STATE_TOOL or DevPluginBuildTools.WAIT_TOOL)
-            return ToolJson.Success(await devBuilds.CallAsync(name == DevPluginBuildTools.WAIT_TOOL, input, linked.Token));
+            return Success(await devBuilds.CallAsync(name == DevPluginBuildTools.WAIT_TOOL, input, linked.Token));
         if (name == DevPluginBuildTools.LOAD_TOOL)
-            return ToolJson.Success(await devBuilds.LoadAsync(input, services.PluginInterface.InternalName, isAllowed, linked.Token));
+            return Success(await devBuilds.LoadAsync(input, services.PluginInterface.InternalName, isAllowed, linked.Token));
         if (name == PluginWindowRequest.TOOL)
-            return ToolJson.Success(await discovery.ShowWindowAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await discovery.ShowWindowAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name is WindowFrameObserver.SNAPSHOT_TOOL or WindowFrameObserver.WAIT_TOOL)
-            return ToolJson.Success(await ObserveWindowAsync(name == WindowFrameObserver.WAIT_TOOL, input, linked.Token).ConfigureAwait(false));
+            return Success(await ObserveWindowAsync(name == WindowFrameObserver.WAIT_TOOL, input, linked.Token).ConfigureAwait(false));
         if (name == "send_addon_event" && input.Has("observe"))
-            return ToolJson.Success(await CallObservedAddonAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
+            return Success(await CallObservedAddonAsync(input, isAllowed, linked.Token).ConfigureAwait(false));
         if (name == "send_addon_event" && input.Has("observe_timeout_ms"))
             throw new ArgumentException("observe_timeout_ms 需要 observe。");
         if (name == "unsafe_invoke_plugin_ipc" && !input.Boolean("run_on_framework_thread", true))
-            return ToolJson.Success(integration.Call(name, input));
+            return Success(integration.Call(name, input));
 
         GameDiagnostics.RawZoneBuild? rawZone = null;
         if (name == GameDiagnostics.ZONE_TRACE_STATUS_TOOL || name == GameDiagnostics.ZONE_TRACE_CONTROL_TOOL &&
@@ -371,7 +377,7 @@ public sealed partial class GameTools : IDisposable
                     PluginDiscovery.STATE_TOOL => discovery.Call(name, input),
                 "unsafe_invoke_plugin_ipc" or "invoke_plugin_ipc" or "slash_command" or
                     "plugin_data_subscribe" or "plugin_data_unsubscribe" or "plugin_data_poll" => integration.Call(name, input),
-                _ => state.Call(name, input),
+                _ => state.Call(name, input, structuredOnly),
             };
         }
 
@@ -391,7 +397,7 @@ public sealed partial class GameTools : IDisposable
                 message = accepted ? "传送请求已接受，请查询区域和坐标确认到达。" : "Omni 未接受传送请求，请检查目的地、模块开关、验证状态或当前传送任务。"
             };
         }
-        return ToolJson.Success(result);
+        return name == "get_player_context" && result is JsonElement compactPlayer ? compactPlayer : Success(result);
     }
 
     private async Task<object> CallObservedAddonAsync(ToolArguments input, Func<bool> isAllowed, CancellationToken cancellationToken)
@@ -603,7 +609,7 @@ public sealed partial class GameTools : IDisposable
             .. DiagnosticExpansionTools(),
             .. ReadoutTools(),
             .. InputSequenceTools(),
-            Define("get_player_context", "玩家状态", "读取当前角色、职业、位置及目标。"),
+            Define("get_player_context", "玩家状态", "读取角色状态。只查区域、职业和世界坐标时传 compact=true。", new() { ["compact"] = flag }),
             Define("get_duty_context", "副本状态", "读取当前区域及真实副本完成状态。"),
             Define("get_inventory_summary", "背包概览", "读取已加载的背包、装备、兵装库及金币。"),
             Define("get_addon_list", "游戏窗口", "列出游戏当前加载的原生窗口。"),
