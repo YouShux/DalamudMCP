@@ -7,11 +7,15 @@ namespace DalamudMCP.Server;
 
 internal sealed class GameBridge(GatewayOptions options)
 {
-    public async Task<T> SendAsync<T>(PipeRequest request, CancellationToken cancellationToken)
+    public Task<T> SendAsync<T>(PipeRequest request, CancellationToken cancellationToken) =>
+        SendAsync<T>(options.Pipe, request, cancellationToken);
+
+    internal static async Task<T> SendAsync<T>(string pipeName, PipeRequest request, CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
-        await using var pipe = new NamedPipeClientStream(".", options.Pipe, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         await pipe.ConnectAsync(3000, timeout.Token);
         using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, true);
         await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, true) { AutoFlush = true };

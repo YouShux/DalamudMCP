@@ -45,22 +45,29 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
 
     private void DrawConnection()
     {
+        var endpoint = server.Endpoint;
+        var running = server.IsRunning;
+        var connectionText = endpoint ?? (running ? "正在等待 MCP 地址…" : "MCP 服务未启动");
         ImGui.AlignTextToFramePadding();
-        var inlineButtons = ImGui.GetContentRegionAvail().X >= ImGui.CalcTextSize(server.Endpoint).X
+        var inlineButtons = ImGui.GetContentRegionAvail().X >= ImGui.CalcTextSize(connectionText).X
             + ImGui.CalcTextSize("复制地址    启动").X + ImGui.GetStyle().FramePadding.X * 4 + ImGui.GetStyle().ItemSpacing.X * 2;
-        ImGui.TextWrapped(server.Endpoint);
+        ImGui.TextWrapped(connectionText);
         if (inlineButtons) ImGui.SameLine();
-        if (ImGui.Button("复制地址")) ImGui.SetClipboardText(server.Endpoint);
+        ImGui.BeginDisabled(endpoint is null);
+        if (ImGui.Button("复制地址") && endpoint is not null) ImGui.SetClipboardText(endpoint);
+        ImGui.EndDisabled();
         ImGui.SameLine();
-        if (ImGui.Button(server.IsRunning ? "停止" : "启动"))
+        if (ImGui.Button(running ? "停止" : "启动"))
         {
-            if (server.IsRunning) server.Stop();
+            if (running) server.Stop();
             else server.Start();
         }
-        ImGui.TextColored(server.IsRunning ? SuccessColor : MutedColor, server.IsRunning ? "服务运行中" : "服务已停止");
-        ImGui.SameLine();
-        var nativeConnected = server.Status?.NativeConnected == true;
-        ImGui.TextColored(nativeConnected ? SuccessColor : MutedColor, nativeConnected ? "卫月调试已连接" : "卫月调试未连接");
+        ImGui.TextUnformatted($"游戏进程 PID：{Environment.ProcessId}");
+
+        if (server.Status?.NativePort is { } actualNativePort)
+            ImGui.TextColored(SuccessColor, $"卫月调试已连接 · 端口 {actualNativePort}");
+        else
+            ImGui.TextColored(MutedColor, "卫月调试未连接");
         if (server.Error is { } error) ImGui.TextWrapped(error);
     }
 
@@ -244,7 +251,7 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
         }
         ImGui.BeginDisabled(server.IsRunning);
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 9);
-        ImGui.InputInt("MCP 端口", ref httpPort);
+        ImGui.InputInt("首选 MCP 端口", ref httpPort);
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
             if (httpPort is >= 1024 and <= 65535 && httpPort != config.NativePort)
@@ -260,8 +267,10 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
             }
         }
         ImGui.EndDisabled();
+        Help("首选端口被占用时，使用上方显示的实际地址。临时端口不会保存。");
+
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 9);
-        ImGui.InputInt("卫月调试端口", ref nativePort);
+        ImGui.InputInt("卫月调试手动端口", ref nativePort);
         if (ImGui.IsItemDeactivatedAfterEdit())
         {
             if (nativePort is >= 1024 and <= 65535 && nativePort != config.HTTPPort)
@@ -277,6 +286,7 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
                 portError = "端口须为 1024～65535，且两个服务不能使用同一端口。";
             }
         }
+        Help("优先连接当前窗口的卫月调试服务。未能自动识别时才尝试手动端口。");
         if (portError is { } errorText) ImGui.TextColored(WarningColor, errorText);
         ImGui.BeginDisabled(!server.IsRunning || server.IsRefreshing);
         if (ImGui.Button("重新连接卫月调试")) server.Refresh(true);

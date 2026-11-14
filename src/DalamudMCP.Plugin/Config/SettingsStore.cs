@@ -10,6 +10,7 @@ public sealed class SettingsStore
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly object sync = new();
     private BridgeSettings snapshot;
+    private int? resolvedNativePort;
 
     public SettingsStore(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
@@ -19,6 +20,7 @@ public sealed class SettingsStore
     }
 
     public Configuration Current { get; }
+    public Guid InstanceID { get; } = Guid.NewGuid();
 
     public BridgeSettings Snapshot
     {
@@ -31,8 +33,17 @@ public sealed class SettingsStore
         lock (sync) snapshot = CreateSnapshot();
     }
 
-    private BridgeSettings CreateSnapshot() => new(Current.NativePort, Current.AllowActions,
-        Current.AllowUnsafe, [.. Current.DisabledTools]);
+    internal void SetResolvedNativePort(int? port)
+    {
+        lock (sync)
+        {
+            resolvedNativePort = port;
+            snapshot = CreateSnapshot();
+        }
+    }
+
+    private BridgeSettings CreateSnapshot() => new(resolvedNativePort ?? Current.NativePort, Current.AllowActions,
+        Current.AllowUnsafe, [.. Current.DisabledTools], Environment.ProcessId, InstanceID);
 
     private static Configuration Load(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {

@@ -37,7 +37,8 @@
 
 | 工具 | 说明 | 权限 |
 | --- | --- | --- |
-| `get_session_status` | 读取登录状态、游戏工具数量及当前运行的 DalamudMCP 构建标识。 | 只读 |
+| `get_session_status` | 读取当前游戏的 `processId`、`instanceId`、登录状态、游戏工具数量和插件构建标识。 | 只读 |
+| `list_game_instances` | 列出本机已登记游戏实例的地址、进程号、角色名和所属服务器。角色暂不可读时 `characterAvailable` 为 `false`，实例仍会保留。 | 只读 |
 | `poll_client_changes` | 分页读取登录、区域、战斗、职业、目标或角色资源变化，可按类型筛选。提供上次返回的流 ID 和序号可等待下一页。 | 只读 |
 | `get_dalamud_log` | 读取本插件加载后保留的卫月运行日志。可按来源或文本筛选；增量读取使用上次返回的 `streamId` 和 `nextAfterId`。 | 只读 |
 | `get_chat_log` | 读取插件加载后保留的最近 1000 条聊天记录。 | 只读 |

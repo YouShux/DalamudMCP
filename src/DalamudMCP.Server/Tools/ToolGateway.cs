@@ -5,15 +5,15 @@ using ModelContextProtocol.Protocol;
 
 namespace DalamudMCP.Server;
 
-internal sealed class ToolGateway(GameBridge game, NativeBridge native)
+internal sealed class ToolGateway(GameBridge game, NativeBridge native, ILogger<ToolGateway> log)
 {
     public async Task<ListToolsResult> ListAsync(CancellationToken cancellationToken)
     {
         var catalog = await game.SendAsync<ToolCatalog>(new("tools/list"), cancellationToken);
-        await native.ConnectAsync(catalog.Settings.NativePort, false, cancellationToken);
+        await native.ConnectAsync(catalog.Settings, false, cancellationToken);
         var settings = catalog.Settings;
         var tools = new List<Tool>();
-        foreach (var definition in catalog.Tools)
+        foreach (var definition in catalog.Tools.Append(GameInstanceRegistry.ListTool))
         {
             if (settings.DisabledTools.Contains(definition.Name, StringComparer.Ordinal) ||
                 !NativeAccess.IsAllowed(definition.Access, settings)) continue;
@@ -60,6 +60,15 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
     {
         try
         {
+            if (request.Name == GameInstanceRegistry.LIST_TOOL)
+            {
+                var instanceSettings = await game.SendAsync<BridgeSettings>(new("settings"), cancellationToken);
+                if (instanceSettings.DisabledTools.Contains(request.Name, StringComparer.Ordinal)) return Error("此工具已禁用。");
+                if (request.Arguments is { Count: > 0 }) return Error("此工具不接受参数。");
+                var instances = await GameInstanceRegistry.ListAsync(log, cancellationToken);
+                return ToolJson.Success(instances, structuredOnly).Deserialize<CallToolResult>(ToolJson.Options)
+                       ?? throw new JsonException("实例列表结果无效。");
+            }
             var route = await game.SendAsync<GameToolRoute>(new("tools/route", request.Name,
                 ToolJson.Element(request.Arguments ?? new Dictionary<string, JsonElement>()), structuredOnly), cancellationToken);
             if (route.Result is { } result)
@@ -68,9 +77,9 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
             if (settings.DisabledTools.Contains(request.Name, StringComparer.Ordinal))
                 return Error("此工具已禁用。");
 
-            await native.ConnectAsync(settings.NativePort, false, cancellationToken);
+            await native.ConnectAsync(settings, false, cancellationToken);
             if (native.Current is not { } active)
-                return Error("卫月原生 MCP 未连接。");
+                return Error(native.Error ?? "卫月原生 MCP 未连接。");
             var tool = active.Tools.FirstOrDefault(item => item.Name == request.Name);
             if (tool is null) return Error($"工具不存在：{request.Name}。");
 
@@ -79,8 +88,12 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
             var action = NativeAccess.GetAction(request.Arguments);
             if (tool.Name == "control" && !NativeAccess.AllowsControlAction(action, active.Reviewed))
                 return Error("不支持该线程操作；此入口禁止暂停线程。");
+            if (!NativeAccess.IsAllowed(NativeAccess.GetAccess(tool, active.Reviewed, action), settings))
+                return Error("此操作所需权限尚未开启，请在 DalamudMCP 设置中确认。");
+            await NativeBridge.VerifyProcessAsync(active.Client, settings.GameProcessID, cancellationToken);
             var currentSettings = await game.SendAsync<BridgeSettings>(new("settings"), cancellationToken);
-            if (currentSettings.NativePort != settings.NativePort || !ReferenceEquals(active.Client, native.Current?.Client))
+            if (currentSettings.NativePort != settings.NativePort || currentSettings.GameProcessID != settings.GameProcessID ||
+                currentSettings.InstanceID != settings.InstanceID || !ReferenceEquals(active.Client, native.Current?.Client))
                 return Error("卫月原生 MCP 连接已变化，请刷新工具目录。");
             if (currentSettings.DisabledTools.Contains(request.Name, StringComparer.Ordinal))
                 return Error("此工具已禁用。");
@@ -98,13 +111,16 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
     public async Task<GatewayStatus> StatusAsync(bool refresh, CancellationToken cancellationToken)
     {
         var catalog = await game.SendAsync<ToolCatalog>(new("tools/list"), cancellationToken);
-        await native.ConnectAsync(catalog.Settings.NativePort, refresh, cancellationToken);
-        if (native.Current is not { } active) return new(false, native.Error, catalog.Tools);
+        await native.ConnectAsync(catalog.Settings, refresh, cancellationToken);
+        var gameTools = catalog.Tools.Append(GameInstanceRegistry.ListTool);
+        var settings = catalog.Settings;
+        if (native.Current is not { } active)
+            return new(false, native.Error, gameTools.ToArray(), settings.GameProcessID, settings.InstanceID);
 
-        var tools = catalog.Tools.Concat(NativeTools(catalog, active).Select(tool => new ToolDefinition(
+        var tools = gameTools.Concat(NativeTools(catalog, active).Select(tool => new ToolDefinition(
             tool.Name, tool.Title ?? tool.Name, tool.Description ?? string.Empty,
             tool.InputSchema, NativeAccess.GetAccess(tool, active.Reviewed), "native"))).ToArray();
-        return new(true, null, tools);
+        return new(true, null, tools, settings.GameProcessID, settings.InstanceID, settings.NativePort);
     }
 
     internal static void RemoveDuplicateText(CallToolResult result)
@@ -127,7 +143,7 @@ internal sealed class ToolGateway(GameBridge game, NativeBridge native)
     {
         var gameNames = catalog.Tools.Select(tool => tool.Name)
             .ToHashSet(StringComparer.Ordinal);
-        return active.Tools.Where(tool => !gameNames.Contains(tool.Name));
+        return active.Tools.Where(tool => tool.Name != GameInstanceRegistry.LIST_TOOL && !gameNames.Contains(tool.Name));
     }
 
     private static Tool GameTool(ToolDefinition definition) => new()

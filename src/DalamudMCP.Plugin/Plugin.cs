@@ -28,7 +28,7 @@ public sealed class Plugin : IDalamudPlugin
             playerState, gameInventory, fateTable, dataManager, gameGui, targetManager, chatGui, dutyState, commandManager, log,
             partyList, buddyList, aetheryteList, jobGauges, unlockState, interop, textures, textureReadback, addonLifecycle, sigScanner), settings);
         pipe = new PipeServer(tools, settings, log);
-        server = new ServerController(pluginInterface, settings, pipe.Name, log);
+        server = new ServerController(pluginInterface, framework, settings, pipe.Name, log);
         window = new ConfigWindow(settings, server, tools.Tools);
         commands.AddHandler("/dalamudmcp", new CommandInfo(OnCommand) { HelpMessage = "打开 DalamudMCP 设置。" });
         pluginInterface.UiBuilder.Draw += window.Draw;

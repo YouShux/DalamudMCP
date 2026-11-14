@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using DalamudMCP.Server;
 using DalamudMCP.Shared;
+using Microsoft.AspNetCore.Connections;
 
 if (args is ["--licenses"])
 {
@@ -41,42 +42,64 @@ if (LocalBearer.ReadToken() is not { } bearerToken)
     return;
 }
 
-var tokenHash = LocalBearer.Hash(bearerToken);
-var webBuilder = WebApplication.CreateBuilder();
-webBuilder.Services.AddHttpContextAccessor();
-webBuilder.WebHost.ConfigureKestrel(server => server.Listen(IPAddress.Loopback, options.Port));
-ConfigureLogging(webBuilder.Logging);
-ConfigureMCP(webBuilder.Services, options).WithHttpTransport();
-await using var app = webBuilder.Build();
-app.Use(async (context, next) =>
+if (!await RunHttpAsync(options, bearerToken, options.Port))
+    await RunHttpAsync(options, bearerToken, 0);
+
+static async Task<bool> RunHttpAsync(GatewayOptions options, string bearerToken, int port)
 {
-    var host = context.Request.Host;
-    var origin = context.Request.Headers.Origin;
-    if (host.Port != options.Port || host.Host is not ("127.0.0.1" or "localhost")
-        || (origin.Count != 0 && (origin.Count != 1 || !Uri.TryCreate(origin[0], UriKind.Absolute, out var uri)
-            || uri.Scheme != "http" || uri.Port != options.Port || uri.Host is not ("127.0.0.1" or "localhost"))))
+    var tokenHash = LocalBearer.Hash(bearerToken);
+    var webBuilder = WebApplication.CreateBuilder();
+    webBuilder.Services.AddHttpContextAccessor();
+    webBuilder.WebHost.ConfigureKestrel(server => server.Listen(IPAddress.Loopback, port));
+    ConfigureLogging(webBuilder.Logging);
+    ConfigureMCP(webBuilder.Services, options).WithHttpTransport();
+    await using var app = webBuilder.Build();
+    app.Use(async (context, next) =>
     {
-        context.Response.StatusCode = StatusCodes.Status403Forbidden;
-        return;
-    }
+        var host = context.Request.Host;
+        var origin = context.Request.Headers.Origin;
+        var boundPort = context.Connection.LocalPort;
+        if (!IPAddress.Loopback.Equals(context.Connection.LocalIpAddress) ||
+            host.Port != boundPort || host.Host is not ("127.0.0.1" or "localhost")
+            || (origin.Count != 0 && (origin.Count != 1 || !Uri.TryCreate(origin[0], UriKind.Absolute, out var uri)
+                || uri.Scheme != "http" || uri.Port != boundPort || uri.Host is not ("127.0.0.1" or "localhost"))))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
 
-    var authorization = context.Request.Headers.Authorization;
-    if (authorization.Count != 1 || !LocalBearer.Matches(authorization[0], tokenHash))
-    {
-        context.Response.Headers.WWWAuthenticate = "Bearer";
-        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        return;
-    }
+        var authorization = context.Request.Headers.Authorization;
+        if (authorization.Count != 1 || !LocalBearer.Matches(authorization[0], tokenHash))
+        {
+            context.Response.Headers.WWWAuthenticate = "Bearer";
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
 
-    await next(context);
-});
-app.MapMcp("/mcp");
-app.MapGet("/status", async (ToolGateway gateway, CancellationToken cancellationToken) =>
-    await gateway.StatusAsync(false, cancellationToken));
-app.MapPost("/refresh", async (ToolGateway gateway, CancellationToken cancellationToken) =>
-    await gateway.StatusAsync(true, cancellationToken));
-using var gameProcess = WatchParent(options.ParentID, app.Lifetime);
-await app.RunAsync();
+        await next(context);
+    });
+    app.MapMcp("/mcp");
+    app.MapGet("/status", async (ToolGateway gateway, CancellationToken cancellationToken) =>
+        await gateway.StatusAsync(false, cancellationToken));
+    app.MapPost("/refresh", async (ToolGateway gateway, CancellationToken cancellationToken) =>
+        await gateway.StatusAsync(true, cancellationToken));
+
+    try { await app.StartAsync(); }
+    catch (IOException exception) when (port != 0 && exception.InnerException is AddressInUseException) { return false; }
+
+    using var gameProcess = WatchParent(options.ParentID, app.Lifetime);
+    var address = new Uri(app.Urls.Single());
+    var boundPort = address.Port;
+    if (address.Scheme != "http" || address.Host != "127.0.0.1" || boundPort is < 1024 or > 65535 ||
+        port != 0 && boundPort != port)
+        throw new InvalidOperationException("本地 MCP 监听地址无效。");
+    Console.WriteLine($"DALAMUDMCP_READY:{boundPort}");
+    var registration = await GameInstanceRegistry.RegisterAsync(app.Services.GetRequiredService<GameBridge>(),
+        options, boundPort, app.Logger, app.Lifetime.ApplicationStopping);
+    try { await app.WaitForShutdownAsync(); }
+    finally { if (registration is not null) GameInstanceRegistry.Remove(registration, app.Logger); }
+    return true;
+}
 
 static IMcpServerBuilder ConfigureMCP(IServiceCollection services, GatewayOptions options)
 {
@@ -89,7 +112,8 @@ static IMcpServerBuilder ConfigureMCP(IServiceCollection services, GatewayOption
     services.AddHostedService<ToolCatalogMonitor>();
     return services.AddMcpServer(server =>
     {
-        server.ServerInfo = new() { Name = "DalamudMCP", Version = "1.0.0" };
+        var version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0";
+        server.ServerInfo = new() { Name = "DalamudMCP", Version = version };
         server.ToolCollection = catalogChanges;
         server.ServerInstructions =
             "已知工具和参数时直接调用；否则按用途只查相关工具。目录变更后由客户端刷新，不把完整目录交给模型。" +

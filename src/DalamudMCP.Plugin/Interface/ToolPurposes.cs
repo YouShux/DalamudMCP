@@ -22,7 +22,7 @@ internal static class ToolPurposes
     internal static Purpose Get(ToolDefinition tool) =>
         tool.Source != "game" ? Purpose.Diagnostics : tool.Name switch
         {
-            "get_session_status" or "poll_client_changes" or "get_chat_log" or "get_player_context" or
+            "get_session_status" or "list_game_instances" or "poll_client_changes" or "get_chat_log" or "get_player_context" or
             "inspect_character_stats" or "inspect_job_progress" or "inspect_character_controls" or
             "request_character_control" or "inspect_party_roster" or "inspect_companion_roster" or
             "inspect_nearby_battle_actors" or "inspect_target_slots" or "inspect_actor_effects" or

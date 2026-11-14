@@ -21,7 +21,7 @@ public sealed class PipeServer : IDisposable
         this.tools = tools;
         this.settings = settings;
         this.log = log;
-        Name = $"DalamudMCP.{Environment.ProcessId}.{Guid.NewGuid():N}";
+        Name = $"DalamudMCP.{Environment.ProcessId}.{settings.InstanceID:N}";
         listener = ListenAsync();
     }
 

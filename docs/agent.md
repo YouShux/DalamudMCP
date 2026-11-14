@@ -6,6 +6,8 @@
 
 示例：「先检查任务窗口和里面的文字，告诉我当前任务标题；本次只读。」
 
+多开时用 `list_game_instances` 查找角色及对应地址，再从目标连接调用 `get_session_status` 核对 `processId`、`instanceId`。要按角色读取时，再用 `get_player_context` 确认角色名和所属服务器。地址可能变动；角色暂不可读、实例不匹配或有多个匹配时，先确认目标再继续。
+
 ## 按需使用工具
 
 已知工具名称和参数时直接调用。例如，只查区域、职业和世界坐标时，调用 `get_player_context` 并传入 `{"compact":true}`。不知道工具名时，用客户端的工具搜索限定到 DalamudMCP，按任务找相关工具，只加载候选工具的参数定义。例如查背包里的某件物品，搜索「背包物品」，选择 `locate_inventory_item`。

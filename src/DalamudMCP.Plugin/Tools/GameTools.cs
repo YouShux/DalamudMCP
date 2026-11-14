@@ -359,6 +359,8 @@ public sealed partial class GameTools : IDisposable
                     GameReadouts.SOCIETIES_TOOL or GameReadouts.NEARBY_BATTLE_TOOL => readouts.Call(name, input),
                 "get_session_status" => new
                 {
+                    processId = Environment.ProcessId,
+                    instanceId = settings.InstanceID,
                     loggedIn = services.ClientState.IsLoggedIn,
                     territoryID = services.ClientState.TerritoryType,
                     mapID = services.ClientState.MapId,
@@ -662,7 +664,7 @@ public sealed partial class GameTools : IDisposable
                         width = new { type = "integer", minimum = 1 }, height = new { type = "integer", minimum = 1 },
                     }, required = new[] { "x", "y", "width", "height" }, additionalProperties = false },
             }),
-            Define("get_session_status", "游戏连接状态", "读取登录状态、游戏工具数量及当前运行的 DalamudMCP 构建标识。"),
+            Define("get_session_status", "游戏连接状态", "读取当前游戏的进程号、实例标识、登录状态和插件构建信息。"),
             Define(PluginDiscovery.LIST_TOOL, "已安装插件", "分页列出插件内部名、版本、加载状态和公开界面入口。", new(pluginPage) { ["loaded_only"] = flag }),
             Define(PluginDiscovery.COMMANDS_TOOL, "公开插件命令", "列出公开斜杠命令及帮助，可按插件处理器程序集筛选。", pluginDetails),
             Define(PluginDiscovery.IPC_TOOL, "已注册 IPC", "列出已注册的 IPC 函数或动作及签名。不会调用端点，也不会从名称推断其是否只读。", pluginDetails),
