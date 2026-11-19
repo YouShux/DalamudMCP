@@ -1,5 +1,6 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using DalamudMCP.Shared;
 
 namespace DalamudMCP.Plugin;
@@ -13,6 +14,7 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
     private int httpPort = settings.Current.HTTPPort;
     private int nativePort = settings.Current.NativePort;
     private string? portError;
+    private Task<(int Recycled, int Failed)>? traceCleanup;
 
     public void Open() => isOpen = true;
 
@@ -240,6 +242,7 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
         Help("需要底层调试权限。登录后被动记录，脱战自动保存，权限关闭时暂停。");
         DrawBounded("战斗归档数量", config.CombatArchiveLimit, 1, 1000, value => config.CombatArchiveLimit = value);
         DrawBounded("战斗归档容量（MiB）", config.CombatArchiveMiB, 1, 100, value => config.CombatArchiveMiB = value);
+        DrawTraceCleanup();
         DrawBounded("最大导航距离（游戏码）", config.NavigationRange, 250, 2000, value => config.NavigationRange = value);
         ImGui.Separator();
         ImGui.TextUnformatted("连接");
@@ -293,6 +296,41 @@ public sealed class ConfigWindow(SettingsStore settings, ServerController server
         ImGui.EndDisabled();
         if (server.Status?.NativeError is { } error)
             ImGui.TextWrapped($"{error}。请在卫月设置中开启开发者模式，并核对调试端口。");
+    }
+
+    private void DrawTraceCleanup()
+    {
+        const string confirmation = "清理会话日志";
+        using (ImRaii.Disabled(traceCleanup is { IsCompleted: false }))
+            if (ImGui.Button(confirmation))
+                ImGui.OpenPopup(confirmation);
+
+        using (var popup = ImRaii.PopupModal(confirmation, ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            if (popup)
+            {
+                ImGui.TextUnformatted("将已结束游戏会话的调试日志移入回收站。");
+                ImGui.TextUnformatted("保留运行中的会话和卫月共用日志。");
+                if (ImGui.Button("取消")) ImGui.CloseCurrentPopup();
+                ImGui.SameLine();
+                if (ImGui.Button("移入回收站"))
+                {
+                    traceCleanup = Task.Run(TraceLogs.RecycleInactive);
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+        }
+
+        if (traceCleanup is { IsCompletedSuccessfully: true })
+        {
+            var (recycled, failed) = traceCleanup.Result;
+            ImGui.TextWrapped(failed > 0 ? $"已回收 {recycled} 份日志，{failed} 份回收失败或取消。"
+                : recycled > 0 ? $"已回收 {recycled} 份日志。" : "没有可回收的会话日志。");
+        }
+        else if (traceCleanup?.Exception?.GetBaseException() is { } error)
+            ImGui.TextWrapped($"无法清理会话日志：{error.Message}");
+        else if (traceCleanup is not null)
+            ImGui.TextUnformatted("正在回收日志…");
     }
 
     private void DrawBounded(string label, int saved, int min, int max, Action<int> update)

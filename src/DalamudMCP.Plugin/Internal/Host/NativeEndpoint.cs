@@ -91,13 +91,12 @@ internal static class NativeEndpoint
 
     private static bool IsolateDefaultTrace(Type runtime)
     {
-        var profile = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        if (!Path.IsPathFullyQualified(profile) || runtime.GetProperty("Trace", STATIC)?.GetValue(null) is not { } trace) return false;
+        var directory = TraceLogs.GetDirectory();
+        if (directory is null || runtime.GetProperty("Trace", STATIC)?.GetValue(null) is not { } trace) return false;
         var type = trace.GetType();
         var path = type.GetProperty("FilePath", INSTANCE);
         if (path?.GetValue(trace) is not string current) return false;
 
-        var directory = Path.Combine(profile, "XIVLauncherCN", "dalamud-mcp");
         var defaultPath = Path.Combine(directory, "trace.jsonl");
         if (!string.Equals(current, defaultPath, StringComparison.OrdinalIgnoreCase)) return true;
 
